@@ -2,6 +2,13 @@
 import pathlib
 here = pathlib.Path(__file__).parent; root = here.parent
 css = (here / "style.css").read_text(); js = (here / "app.js").read_text(); guard = (here / "guard.html").read_text()
+# Apps Script は配信時に「/* … */」をコメントとして削るので、文字列や正規表現の中に /* や */ があるとプログラムが壊れる。
+# /** … */ のコメントはここで消し、残っていたら作るのをやめる。
+import re
+js = re.sub(r"^\s*/\*\*.*?\*/\s*$", "", js, flags=re.M)
+for name, src in (("app.js", js), ("guard.html", guard), ("style.css", css)):
+    if name != "style.css" and ("/*" in src or "*/" in src):
+        raise SystemExit(f"{name} に /* か */ が残っています（Apps Script が削ってしまうので書き換えてください）")
 def page(cfg, title):
     return f"""<!DOCTYPE html>
 <html lang="ja"><head>

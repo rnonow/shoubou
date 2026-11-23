@@ -25,7 +25,7 @@ function call(action, body = {}) {
   return new Promise((ok, ng) => {
     google.script.run
       .withSuccessHandler(ok)
-      .withFailureHandler((e) => ng(new Error(String(e && e.message || e).replace(/^Error:\s*/, ""))))
+      .withFailureHandler((e) => ng(new Error(String(e && e.message || e).replace(/^Error:\s{0,9}/, ""))))
       .api(action, body, token);
   });
 }
@@ -444,7 +444,7 @@ function renderNotices() {
       <label>タイトル</label><input id="nt" placeholder="例：12月 部長会のお知らせ">
       <label>本文</label><textarea id="nb" placeholder="内容（任意）"></textarea>
       <label>資料の写真（${6}枚まで）</label>
-      <input type="file" id="nf" accept="image/*" multiple data-keep="no">
+      <input type="file" id="nf" accept="image/&#42;" multiple data-keep="no">
       <div class="thumbs" id="npv">${pendingImages.map((d, i) => `<span class="thumb"><img src="${d}"><button data-rmimg="${i}">×</button></span>`).join("")}</div>
       <p><button class="btn" id="nbtn">投稿する</button></p></details>
     <h2>お知らせ</h2>
@@ -519,7 +519,7 @@ function renderLedger() {
 
     <details class="card" id="sendr"><summary>📷 レシートを送る（だれでも）</summary>
       <p class="muted">立て替えたときなどに、レシートの写真を会計の人に送れます。</p>
-      <input type="file" id="rf" accept="image/*" multiple data-keep="no">
+      <input type="file" id="rf" accept="image/&#42;" multiple data-keep="no">
       <div class="thumbs">${receiptDraft.map((d, i) => `<span class="thumb"><img src="${d}"><button data-rmr="${i}">×</button></span>`).join("")}</div>
       <label>金額（わかれば）</label><input id="ra" inputmode="numeric" placeholder="例：1280">
       <label>メモ</label><input id="rm" placeholder="例：夜警の差し入れ（立替：自分）">
@@ -541,7 +541,7 @@ function renderLedger() {
       <label>レシート</label>
       <div class="thumbs">${(ed?.receipt_ids || []).map((id) => { const r = rcpById(id); return r ? `<span class="thumb" data-fid="${esc(r.file_id)}"><i>読み込み中…</i><img hidden><button data-unlink="${id}">×</button></span>` : ""; }).join("")}
         ${entryDraft.map((d, i) => `<span class="thumb"><img src="${d}"><button data-rme="${i}">×</button></span>`).join("")}</div>
-      <input type="file" id="lf" accept="image/*" multiple data-keep="no">
+      <input type="file" id="lf" accept="image/&#42;" multiple data-keep="no">
       <p class="row"><button class="btn" id="lbtn">${ed && ed.id ? "更新する" : "記録する"}</button>${ed ? `<button class="btn sub" id="lcancel">やめる</button>` : ""}</p></details>` : ""}
 
     <div class="spread"><h2>収支（${state.fy}年度）</h2><select id="fy" data-keep="no" style="width:auto">${fys.map((y) => `<option value="${y}" ${y === state.fy ? "selected" : ""}>${y}年度</option>`).join("")}</select></div>
