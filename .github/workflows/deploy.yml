@@ -25,9 +25,27 @@ jobs:
           if [ -z "$CLASPRC_JSON" ] || [ -z "$SCRIPT_ID" ] || [ -z "$DEPLOYMENT_ID" ]; then
             echo "::warning::Secrets（CLASPRC_JSON / SCRIPT_ID / DEPLOYMENT_ID）が未登録のため反映をスキップしました。DEPLOY.md を見て登録してください。"
             echo "ready=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # 値そのものはログに出さず、形式だけ確認する
+          sid=$(printf '%s' "$SCRIPT_ID" | tr -d '[:space:]')
+          did=$(printf '%s' "$DEPLOYMENT_ID" | tr -d '[:space:]')
+          ng=0
+          if printf '%s' "$sid" | grep -q '^AKfyc'; then
+            echo "::error::SCRIPT_ID にデプロイIDが入っているようです（AKfyc…で始まる）。SCRIPT_ID と DEPLOYMENT_ID が逆になっていないか確認してください。"; ng=1
+          elif ! printf '%s' "$sid" | grep -Eq '^[A-Za-z0-9_-]{40,}$'; then
+            echo "::error::SCRIPT_ID の形式が違います（${#sid}文字）。Apps Script の ⚙プロジェクトの設定 →「スクリプトID」だけを貼ってください（URLや他の文字を含めない）。"; ng=1
+          fi
+          if ! printf '%s' "$did" | grep -Eq '^AKfyc[A-Za-z0-9_-]{20,}$'; then
+            echo "::error::DEPLOYMENT_ID の形式が違います（${#did}文字）。「デプロイを管理」の「デプロイID」（AKfyc…で始まる）だけを貼ってください。"; ng=1
+          fi
+          if ! printf '%s' "$CLASPRC_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "refresh_token" in json.dumps(d)' 2>/dev/null; then
+            echo "::error::CLASPRC_JSON の形式が違います。cat ~/.clasprc.json で表示された { から } まで全部を貼ってください。"; ng=1
+          fi
+          [ $ng = 0 ] || exit 1
+          echo "SCRIPT_ID=$sid" >> "$GITHUB_ENV"
+          echo "DEPLOYMENT_ID=$did" >> "$GITHUB_ENV"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         if: steps.check.outputs.ready == 'true'
@@ -50,7 +68,13 @@ jobs:
 
       - name: Apps Script にプログラムを送る
         if: steps.check.outputs.ready == 'true'
-        run: clasp push --force
+        # clasp は送信に失敗しても終了コードが0のことがあるので、出力を見て判定する
+        run: |
+          clasp push --force 2>&1 | tee push.log
+          if grep -qiE 'push failed|error' push.log; then
+            echo "::error::Apps Script への送信に失敗しました。SCRIPT_ID が正しいか、団専用アカウントで clasp login したか確認してください。"
+            exit 1
+          fi
 
       - name: ウェブアプリを新バージョンに更新（URLはそのまま）
         if: steps.check.outputs.ready == 'true'
@@ -58,4 +82,4 @@ jobs:
 
       - name: 後片付け
         if: always()
-        run: rm -f ~/.clasprc.json .clasp.json
+        run: rm -f ~/.clasprc.json .clasp.json push.log
