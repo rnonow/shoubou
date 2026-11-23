@@ -25,7 +25,7 @@ def page(cfg, title):
 {js}</script>
 </body></html>
 """
-gas_cfg = 'window.APP_CONFIG = { MODE: "gas", APP_URL: <?= appUrl ?>, FOCUS_EVENT: <?= focusEvent ?>, TEAM_NAME: <?= teamName ?> };'
+gas_cfg = 'window.APP_CONFIG = { MODE: "gas", APP_URL: <?= appUrl ?>, FOCUS_EVENT: <?= focusEvent ?>, TOKEN: <?= token ?>, INITIAL: <?= initial ?>, TEAM_NAME: <?= teamName ?> };'
 (root / "gas" / "index.html").write_text(page(gas_cfg, "消防団連絡アプリ"))
 (root / "demo.html").write_text(page('window.APP_CONFIG = { MODE: "demo", TEAM_NAME: "消防団" };', "消防団連絡アプリ（お試し）"))
 print("built")

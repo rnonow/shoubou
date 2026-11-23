@@ -39,7 +39,13 @@ function setup() {
 
 function doGet(e) {
   var t = HtmlService.createTemplateFromFile('index');
-  t.focusEvent = (e && e.parameter && e.parameter.event) || '';
+  var p = (e && e.parameter) || {};
+  t.focusEvent = p.event || '';
+  // 登録はURLの k=… に持たせる（iPhoneなどではアプリを閉じると端末内の保存が消えることがあるため）
+  t.token = p.k || '';
+  // 最初の画面に必要なデータを一緒に埋め込み、開いてすぐ表示できるようにする
+  var first = t.token ? sync_(t.token) : null;
+  t.initial = first && first.me ? JSON.stringify(first) : '';
   t.appUrl = ScriptApp.getService().getUrl();
   t.teamName = setting_(2) || '消防団';
   return t.evaluate()
