@@ -122,7 +122,7 @@ var CACHE_KEY = 'snapshot_v4';
 function api(action, body, token) {
   body = body || {};
   if (action === 'sync') return sync_(token);
-  if (action === 'notices.image' || action === 'image') return image_(token, body.file_id);
+  if (action === 'notices.image' || action === 'image') return image_(token, body.file_id, body.thumb);
   // 時間のかかる処理（ドライブへの保存）はロックの外で先に行う
   if (action === 'notices.add') { requireMember_(token); body.image_ids = saveImages_(body.images || [], 'notice'); delete body.images; }
   if (action === 'receipts.add' || action === 'ledger.add' || action === 'ledger.update') {
@@ -417,13 +417,15 @@ function findNotice_(id) {
   return n;
 }
 /** 写真は団員だけに、お知らせかレシートに付いているものだけを返す（ドライブの他のファイルは読めない） */
-function image_(token, fileId) {
+function image_(token, fileId, thumb) {
   requireMember_(token);
   var d = load_();
   var ok = (d.notices || []).some(function (n) { return n.image_ids && n.image_ids.split(',').indexOf(fileId) >= 0; }) ||
            (d.receipts || []).some(function (r) { return r.file_id === fileId; });
   if (!fileId || !ok) fail_('写真が見つかりません。');
-  var blob = DriveApp.getFileById(fileId).getBlob();
+  var file = DriveApp.getFileById(fileId), blob = null;
+  if (thumb) { try { blob = file.getThumbnail(); } catch (e) {} } // 一覧用は小さい画像（速い）。まだ作られていなければ元の写真
+  if (!blob) blob = file.getBlob();
   return { data: 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes()) };
 }
 

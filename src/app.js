@@ -390,16 +390,41 @@ function shrinkImage(file, max = 1600, quality = 0.8) {
     img.src = url;
   });
 }
+const fullCache = {};
+const inflight = {};
+/** 時間切れつきでサーバーを呼ぶ（返事がないまま待ち続けない） */
+function callWithTimeout(action, body, ms) {
+  return Promise.race([call(action, body), new Promise((_, ng) => setTimeout(() => ng(new Error("時間切れ")), ms))]);
+}
+function photoBox(fid) { return `<span class="thumb" data-fid="${esc(fid)}"><i>読み込み中…</i><img hidden></span>`; }
+function paint(fid) {
+  document.querySelectorAll(`.thumb[data-fid="${fid}"]`).forEach((t) => {
+    const img = t.querySelector("img"), i = t.querySelector("i");
+    if (imgCache[fid]) { img.src = imgCache[fid]; img.hidden = false; i.hidden = true; }
+    else if (inflight[fid] === "error") { i.textContent = "読み込めません（タップで再試行）"; i.hidden = false; }
+  });
+}
+function loadOne(fid) {
+  if (imgCache[fid] || inflight[fid] === true) return;
+  inflight[fid] = true;
+  callWithTimeout("image", { file_id: fid, thumb: true }, 25000)
+    .then((r) => { imgCache[fid] = r.data; inflight[fid] = false; })
+    .catch((e) => { inflight[fid] = "error"; console.warn("photo", fid, e.message); toast("写真を読み込めませんでした：" + e.message); })
+    .finally(() => paint(fid));
+}
 function loadImages() {
-  document.querySelectorAll("img[data-fid]").forEach(async (el) => {
-    const fid = el.dataset.fid;
-    if (imgCache[fid]) { el.src = imgCache[fid]; return; }
-    if (el.dataset.loading) return; el.dataset.loading = "1";
-    try {
-      const r = await call("image", { file_id: fid });
-      imgCache[fid] = r.data;
-      document.querySelectorAll(`img[data-fid="${fid}"]`).forEach((x) => (x.src = r.data));
-    } catch (e) { el.alt = "読み込めませんでした"; }
+  document.querySelectorAll(".thumb[data-fid]").forEach((t) => {
+    const fid = t.dataset.fid;
+    paint(fid); loadOne(fid);
+    t.onclick = async () => {
+      if (inflight[fid] === "error") { inflight[fid] = false; t.querySelector("i").textContent = "読み込み中…"; return loadOne(fid); }
+      if (!imgCache[fid]) return;
+      showImage(imgCache[fid]); // まず小さい画像で開き、大きい画像が届いたら差し替える
+      if (!fullCache[fid]) {
+        try { fullCache[fid] = (await callWithTimeout("image", { file_id: fid }, 40000)).data; } catch (e) { return; }
+      }
+      const ov = document.querySelector(".overlay img"); if (ov) ov.src = fullCache[fid];
+    };
   });
 }
 function showImage(src) {
@@ -426,7 +451,7 @@ function renderNotices() {
       <div class="spread"><h3>${esc(n.title)}</h3>${canFix ? `<button class="btn sub small" data-del-n="${n.id}">削除</button>` : ""}</div>
       <div class="muted">${fmt(n.created_at)}　${label(n.created_by)}</div>
       ${n.body ? `<div style="margin-top:6px;white-space:pre-wrap">${esc(n.body)}</div>` : ""}
-      ${n.image_ids.length ? `<div class="thumbs">${n.image_ids.map((fid) => tmp ? `<span class="thumb"><img src="${esc(fid)}"></span>` : `<span class="thumb"><img data-nid="${n.id}" data-fid="${esc(fid)}" alt="読み込み中…"></span>`).join("")}</div>` : ""}
+      ${n.image_ids.length ? `<div class="thumbs">${n.image_ids.map((fid) => tmp ? `<span class="thumb"><img src="${esc(fid)}"></span>` : photoBox(fid)).join("")}</div>` : ""}
       ${tmp ? '<p class="muted">送信中…（写真があると少し時間がかかります）</p>' : ""}
     </div>`; }).join("") || '<p class="muted">お知らせはまだありません。</p>'}`;
   $("#nf").onchange = async (e) => {
@@ -451,7 +476,7 @@ function renderNotices() {
     const id = b.dataset.delN;
     mutate("notices.delete", { id }, (d) => (d.notices = d.notices.filter((x) => x.id !== id))).catch(ignore);
   }));
-  document.querySelectorAll("img[data-fid], .thumb img").forEach((im) => (im.onclick = () => im.src && showImage(im.src)));
+  document.querySelectorAll(".thumb:not([data-fid]) img").forEach((im) => (im.onclick = () => im.src && showImage(im.src)));
   loadImages();
 }
 
@@ -481,7 +506,7 @@ function renderLedger() {
   const pending = receipts.filter((r) => r.status === "pending");
   const mine = pending.filter((r) => r.sent_by === me().id);
   const rcpById = (id) => receipts.find((r) => r.id === id);
-  const thumb = (fid, tmp) => `<span class="thumb"><img ${fid.startsWith("data:") ? `src="${fid}"` : `data-fid="${esc(fid)}"`} alt="読み込み中…"></span>`;
+  const thumb = (fid) => (fid.startsWith("data:") ? `<span class="thumb"><img src="${fid}"></span>` : photoBox(fid));
   const treasurer = D.members.find((m) => m.role === "会計");
   const ed = editing;
   $("#app").innerHTML = `
@@ -510,7 +535,7 @@ function renderLedger() {
       <label>項目</label><input id="lc" data-keep="no" list="cats" value="${esc(ed?.category || "")}" placeholder="例：消耗品"><datalist id="cats">${CATEGORIES.map((c) => `<option value="${c}">`).join("")}</datalist>
       <label>内容</label><input id="lm" data-keep="no" value="${esc(ed?.memo || "")}" placeholder="例：夜警用の電池">
       <label>レシート</label>
-      <div class="thumbs">${(ed?.receipt_ids || []).map((id) => { const r = rcpById(id); return r ? `<span class="thumb"><img data-fid="${esc(r.file_id)}"><button data-unlink="${id}">×</button></span>` : ""; }).join("")}
+      <div class="thumbs">${(ed?.receipt_ids || []).map((id) => { const r = rcpById(id); return r ? `<span class="thumb" data-fid="${esc(r.file_id)}"><i>読み込み中…</i><img hidden><button data-unlink="${id}">×</button></span>` : ""; }).join("")}
         ${entryDraft.map((d, i) => `<span class="thumb"><img src="${d}"><button data-rme="${i}">×</button></span>`).join("")}</div>
       <input type="file" id="lf" accept="image/*" multiple data-keep="no">
       <p class="row"><button class="btn" id="lbtn">${ed && ed.id ? "更新する" : "記録する"}</button>${ed ? `<button class="btn sub" id="lcancel">やめる</button>` : ""}</p></details>` : ""}
@@ -585,7 +610,7 @@ function renderLedger() {
       }).then(() => toast(isUpdate ? "更新しました" : "記録しました")).catch(ignore);
     };
   }
-  document.querySelectorAll(".thumb img").forEach((im) => (im.onclick = () => im.src && showImage(im.src)));
+  document.querySelectorAll(".thumb:not([data-fid]) img").forEach((im) => (im.onclick = () => im.src && showImage(im.src)));
   loadImages();
 }
 
