@@ -45,6 +45,7 @@ details summary{cursor:pointer;color:#c62828;font-weight:bold;padding:4px 0}
 #toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 16px;border-radius:20px;font-size:14px;z-index:9}
 .avatar{width:24px;height:24px;border-radius:50%;vertical-align:middle;margin-right:6px;background:#ddd}
 header #sync{font-weight:normal;font-size:12px;opacity:.85;margin-left:8px}
+.role{display:inline-block;font-size:11px;padding:0 6px;margin-left:3px;border-radius:8px;background:#c62828;color:#fff;font-weight:bold;vertical-align:middle}
 </style>
 <script>window.APP_CONFIG = { MODE: "gas", APP_URL: <?= appUrl ?>, FOCUS_EVENT: <?= focusEvent ?>, TOKEN: <?= token ?>, INITIAL: <?= initial ?>, TEAM_NAME: <?= teamName ?> };</script>
 </head><body>
@@ -134,6 +135,7 @@ function mock(action, b) {
       case "members.rename": me.name = b.name; break;
       case "members.setAdmin": db.members.find((m) => m.id === b.id).is_admin = !!b.is_admin; break;
       case "settings.setJoinCode": if (String(b.code).length < 4) throw new Error("参加コードは4文字以上にしてください。"); db.code = b.code; break;
+      case "members.setRole": db.members.forEach((m) => { if (m.role === b.role) m.role = ""; if (m.id === b.id) m.role = b.role; }); break;
       case "members.transferAdmin": db.members.find((m) => m.id === b.id).is_admin = true; me.is_admin = false; break;
       case "members.logoutAll": result = { ok: true, count: db.members.length - 1 }; break;
       case "members.remove": db.members = db.members.filter((m) => m.id !== b.id); break;
@@ -153,8 +155,8 @@ function mock(action, b) {
   return JSON.parse(JSON.stringify({ me, members: db.members, events: db.events, dispatches: db.dispatches, join_code: db.code, result }));
 }
 function seed() {
-  const names = ["佐藤 団長", "鈴木 副団長", "高橋", "田中", "伊藤", "渡辺", "山本"];
-  const members = names.map((n, i) => ({ id: "m" + i, name: n, is_admin: i === 0 }));
+  const names = ["佐藤", "鈴木", "高橋", "田中", "伊藤", "渡辺", "山本"];
+  const members = names.map((n, i) => ({ id: "m" + i, name: n, is_admin: i === 0, role: ["部長", "副部長", "会計"][i] || "" }));
   const d = (off) => new Date(Date.now() + off * 864e5);
   const ymd = (x) => x.toISOString().slice(0, 10);
   const at = (off, h) => { const x = d(off); x.setHours(h, 0, 0, 0); return x.toISOString(); };
@@ -190,6 +192,11 @@ function fmtTimes(d) {
 }
 const me = () => state.data.me;
 const nameOf = (id) => state.data.members.find((m) => m.id === id)?.name ?? "（退団）";
+const ROLES = ["部長", "副部長", "会計"];
+const roleTag = (m) => (m && m.role ? ` <span class="role">${esc(m.role)}</span>` : "");
+/** 名前＋役職（HTML） */
+const label = (idOrMember) => { const m = typeof idOrMember === "string" ? state.data.members.find((x) => x.id === idOrMember) : idOrMember; return m ? esc(m.name) + roleTag(m) : "（退団）"; };
+const roleOrder = (m) => { const i = ROLES.indexOf(m.role); return i < 0 ? 99 : i; };
 const canEdit = (createdBy) => createdBy === me().id || me().is_admin;
 const tmpId = () => "tmp" + Date.now();
 const ignore = () => {}; // 失敗時の表示は mutate が行う
@@ -269,7 +276,7 @@ function renderEvents() {
     const answered = new Set(e.rsvps.map((r) => r.member_id));
     const none = state.data.members.filter((m) => !answered.has(m.id));
     const mine = myAns(e);
-    const tags = (list, cls) => list.map((r) => `<span class="tag ${cls}">${esc(nameOf(r.member_id))}${r.comment ? "：" + esc(r.comment) : ""}</span>`).join("");
+    const tags = (list, cls) => list.map((r) => `<span class="tag ${cls}">${label(r.member_id)}${r.comment ? "：" + esc(r.comment) : ""}</span>`).join("");
     const tmp = e.id.startsWith("tmp");
     return `<div class="card" id="ev${e.id}" ${state.focusEvent === e.id ? 'style="outline:3px solid #c62828"' : ""}>
       <div class="spread"><h3>${esc(e.title)}</h3>${canEdit(e.created_by) && !tmp ? `<button class="btn sub small" data-del-ev="${e.id}">削除</button>` : ""}</div>
@@ -282,7 +289,7 @@ function renderEvents() {
       <input id="cm${e.id}" placeholder="ひとこと（任意：遅れます 等）" data-cm="${e.id}" value="${esc(mine?.comment)}">`}
       <div style="margin-top:8px;font-size:13px">
         <div>参加 <b>${by.yes.length}</b>　未定 <b>${by.maybe.length}</b>　不参加 <b>${by.no.length}</b>　未回答 <b>${none.length}</b></div>
-        <div>${tags(by.yes, "yes")}${tags(by.maybe, "maybe")}${tags(by.no, "no")}${none.map((m) => `<span class="tag none">${esc(m.name)}</span>`).join("")}</div>
+        <div>${tags(by.yes, "yes")}${tags(by.maybe, "maybe")}${tags(by.no, "no")}${none.map((m) => `<span class="tag none">${label(m)}</span>`).join("")}</div>
       </div>
       ${tmp ? "" : `<p class="row"><button class="btn line small" data-share="${e.id}">LINEで出欠を呼びかける</button></p>`}
     </div>`;
@@ -361,20 +368,20 @@ function renderDispatches() {
       <label>種別</label><select id="dk">${KINDS.map((k) => `<option>${k}</option>`).join("")}</select>
       <label>場所</label><input id="dp" placeholder="例：○○町2丁目">
       <label>出動した団員</label>
-      <div class="checks">${state.data.members.map((m) => `<label><input type="checkbox" id="dm_${m.id}" value="${m.id}" ${m.id === me().id ? "checked" : ""}>${esc(m.name)}</label>`).join("")}</div>
+      <div class="checks">${state.data.members.map((m) => `<label><input type="checkbox" id="dm_${m.id}" value="${m.id}" ${m.id === me().id ? "checked" : ""}>${label(m)}</label>`).join("")}</div>
       <label>内容・メモ</label><textarea id="dn" placeholder="活動内容、使用資機材など"></textarea>
       <p><button class="btn" id="db">記録する</button></p></details>
     <div class="spread"><h2>出動記録</h2><select id="yr" data-keep="no" style="width:auto">${years.map((y) => `<option ${y === state.year ? "selected" : ""}>${y}</option>`).join("")}</select></div>
     <div class="card"><h3>${state.year}年の集計　計 ${list.length} 件</h3>
       <div>${Object.entries(kinds).map(([k, n]) => `<span class="tag">${esc(k)} ${n}</span>`).join("") || '<span class="muted">なし</span>'}</div>
       <details id="dstat" style="margin-top:8px"><summary>団員ごとの出動回数</summary><table>
-        ${state.data.members.map((m) => ({ m, n: count[m.id] || 0 })).sort((a, b) => b.n - a.n).map(({ m, n }) => `<tr><td>${esc(m.name)}</td><td class="n">${n} 回</td></tr>`).join("")}
+        ${state.data.members.map((m) => ({ m, n: count[m.id] || 0 })).sort((a, b) => b.n - a.n).map(({ m, n }) => `<tr><td>${label(m)}</td><td class="n">${n} 回</td></tr>`).join("")}
       </table></details></div>
     ${list.map((d) => `<div class="card">
       <div class="spread"><div><span class="kind">${esc(d.kind)}</span>　${esc(d.date)}${fmtTimes(d) ? "　" + esc(fmtTimes(d)) : ""}</div>${canEdit(d.created_by) && !d.id.startsWith("tmp") ? `<button class="btn sub small" data-del-d="${d.id}">削除</button>` : ""}</div>
       ${d.place ? `<div class="muted">📍 ${esc(d.place)}</div>` : ""}
       ${d.note ? `<div style="margin-top:6px;white-space:pre-wrap">${esc(d.note)}</div>` : ""}
-      <div style="margin-top:6px">${d.dispatch_members.map((x) => `<span class="tag">${esc(nameOf(x.member_id))}</span>`).join("")}</div>
+      <div style="margin-top:6px">${d.dispatch_members.map((x) => `<span class="tag">${label(x.member_id)}</span>`).join("")}</div>
       <div class="muted" style="margin-top:4px">${d.id.startsWith("tmp") ? "保存中…" : "記録：" + esc(nameOf(d.created_by))}</div></div>`).join("") || '<p class="muted">記録はまだありません。</p>'}`;
   $("#yr").onchange = (e) => { state.year = Number(e.target.value); render(); };
   $("#db").onclick = () => {
@@ -395,17 +402,22 @@ function renderDispatches() {
 
 // ---------- 団員 ----------
 function renderMembers() {
-  const ms = state.data.members;
+  const ms = state.data.members.slice().sort((a, b) => roleOrder(a) - roleOrder(b));
   $("#app").innerHTML = `
     <div class="card"><h3>自分の表示名</h3><div class="row"><input id="mn" value="${esc(me().name)}" style="flex:1"><button class="btn small" id="mb">変更</button></div></div>
     ${DEMO ? "" : `<div class="card"><h3>毎回コードを聞かれるときは</h3><p class="muted">この画面をホーム画面に追加（ブックマーク）すると、次から入力不要になります。</p><button class="btn sub small" id="savebtn">保存のしかたを見る</button></div>`}
     <h2>団員一覧（${ms.length}人）</h2>
-    <div class="card"><table>${ms.map((m) => `<tr><td>${esc(m.name)}${m.is_admin ? ' <span class="tag">管理者</span>' : ""}</td>
+    <div class="card"><table>${ms.map((m) => `<tr><td>${label(m)}${m.is_admin ? ' <span class="tag">管理者</span>' : ""}</td>
       <td class="n">${me().is_admin && m.id !== me().id ? `<button class="btn sub small" data-adm="${m.id}" data-v="${m.is_admin ? "" : "1"}">${m.is_admin ? "管理者を外す" : "管理者にする"}</button> <button class="btn sub small" data-rm="${m.id}">外す</button>` : ""}</td></tr>`).join("")}</table></div>
     <p class="muted">新しい団員には、このアプリのURLと参加コードを伝えてください。知らない名前があれば、管理者が「外す」で削除できます。</p>
     ${me().is_admin ? `<div class="card"><h3>参加コード（管理者だけに表示）</h3>
       <p class="muted">今のコード：<b>${esc(state.data.join_code)}</b><br>URLが団の外に漏れたときは変更してください。登録済みの団員はそのまま使えます。</p>
       <div class="row"><input id="nc" placeholder="新しい参加コード（4文字以上）" style="flex:1"><button class="btn small" id="ncb">変更</button></div></div>
+    <div class="card"><h3>役職（管理者だけが変更できます）</h3>
+      <p class="muted">各役職は1人だけです。別の人を選ぶと、前の人からは外れます。管理者の権限とは別です。</p>
+      ${ROLES.map((r) => { const cur = ms.find((m) => m.role === r); return `<div class="row" style="margin:4px 0"><span style="width:4.5em">${r}</span>
+        <select data-role="${r}" data-keep="no" style="flex:1"><option value="">（なし）</option>${ms.map((m) => `<option value="${m.id}" ${cur && cur.id === m.id ? "selected" : ""}>${esc(m.name)}${m.role && m.role !== r ? `（今は${esc(m.role)}）` : ""}</option>`).join("")}</select></div>`; }).join("")}
+    </div>
     <div class="card"><h3>管理者を引き継ぐ（管理者だけに表示）</h3>
       <p class="muted">選んだ人が管理者になり、<b>あなたは一般の団員</b>になります。記録はそのまま残ります。<br>
       管理者を増やしたいだけなら、上の一覧の「管理者にする」を使ってください。<br>
@@ -428,6 +440,14 @@ function renderMembers() {
     mutate("settings.setJoinCode", { code }, (d) => (d.join_code = code)).catch(ignore);
     toast("参加コードを変更しました");
   };
+  document.querySelectorAll("[data-role]").forEach((s) => (s.onchange = () => {
+    const role = s.dataset.role, id = s.value;
+    mutate("members.setRole", { role, id }, (d) => d.members.forEach((m) => {
+      if (m.role === role && m.id !== id) m.role = "";
+      if (m.id === id) m.role = role;
+      if (m.id === d.me.id) d.me.role = m.role;
+    })).then(() => toast(id ? `${nameOf(id)} さんを${role}にしました` : `${role}を空席にしました`)).catch(ignore);
+  }));
   if (me().is_admin) $("#tbtn").onclick = () => {
     const id = $("#tsel").value; if (!id) return toast("次の管理者を選んでください");
     if (!confirm(`${nameOf(id)} さんに管理者を引き継ぎます。\nあなたは一般の団員になり、管理者の画面は見えなくなります。よろしいですか？`)) return;

@@ -5,7 +5,7 @@
  */
 
 var SHEETS = {
-  members:   ['id', 'name', 'token', 'is_admin', 'created_at'],
+  members:   ['id', 'name', 'token', 'is_admin', 'created_at', 'role'],
   // 列は必ず「末尾に追加」する（既存データの位置を変えないため）
   dispatches:['id', 'date', 'kind', 'place', 'note', 'member_ids', 'created_by', 'created_at', 'start_time', 'end_time'],
   events:    ['id', 'title', 'starts_at', 'place', 'note', 'created_by', 'created_at', 'ends_at'],
@@ -13,6 +13,7 @@ var SHEETS = {
 };
 var SHEET_NAMES = { members: '団員', dispatches: '出動記録', events: 'イベント', rsvps: '出欠' };
 var SETTINGS = '設定';
+var ROLES = ['部長', '副部長', '会計']; // 各1人まで
 
 /** 最初に1回だけ実行する：シートを作る */
 function setup() {
@@ -66,16 +67,20 @@ function rows_(key) {
     return o;
   });
 }
-function append_(key, obj) {
-  var sh = sheet_(key), cols = SHEETS[key];
+function ensureHeader_(sh, cols) {
   if (sh.getLastColumn() < cols.length) { // 列が増えた後の初回だけ見出しを補う
     sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold');
     sh.getRange('A:Z').setNumberFormat('@');
   }
+}
+function append_(key, obj) {
+  var sh = sheet_(key), cols = SHEETS[key];
+  ensureHeader_(sh, cols);
   sh.appendRow(SHEETS[key].map(function (c) { return obj[c] == null ? '' : String(obj[c]); }));
 }
 function update_(key, row, obj) {
   var cols = SHEETS[key];
+  ensureHeader_(sheet_(key), cols);
   sheet_(key).getRange(row, 1, 1, cols.length).setValues([cols.map(function (c) { return obj[c] == null ? '' : String(obj[c]); })]);
 }
 function deleteWhere_(key, pred) {
@@ -84,7 +89,7 @@ function deleteWhere_(key, pred) {
 }
 function newId_() { return Utilities.getUuid().slice(0, 8); }
 function now_() { return new Date().toISOString(); }
-function pubMember_(m) { return { id: m.id, name: m.name, is_admin: m.is_admin === 'true' }; }
+function pubMember_(m) { return { id: m.id, name: m.name, is_admin: m.is_admin === 'true', role: m.role || '' }; }
 function fail_(msg) { throw new Error(msg); }
 // 1人の団員が複数の端末（スマホのブラウザとLINE内ブラウザなど）で使えるよう、token 列はカンマ区切りで複数持てる
 function hasToken_(m, token) { return !!token && String(m.token || '').split(',').indexOf(token) >= 0; }
@@ -192,6 +197,17 @@ function mutate_(action, b, token) {
       var t = members.filter(function (m) { return m.id === b.id; })[0]; if (!t) fail_('団員が見つかりません。');
       if (!b.is_admin && members.filter(function (m) { return m.is_admin === 'true' && m.id !== t.id; }).length === 0) fail_('管理者が1人もいなくなるため外せません。');
       t.is_admin = b.is_admin ? 'true' : 'false'; update_('members', t._row, t); return { ok: true };
+
+    case 'members.setRole': // 役職を付ける（同じ役職の前の人からは外れる）。id が空なら、その役職を空席にする
+      adminOnly();
+      if (ROLES.indexOf(b.role) < 0) fail_('役職が不正です。');
+      var target = b.id ? members.filter(function (m) { return m.id === b.id; })[0] : null;
+      if (b.id && !target) fail_('団員が見つかりません。');
+      members.forEach(function (m) {
+        if (m.role === b.role && m !== target) { m.role = ''; update_('members', m._row, m); }
+      });
+      if (target && target.role !== b.role) { target.role = b.role; update_('members', target._row, target); }
+      return { ok: true };
 
     case 'members.transferAdmin': // 管理者を引き継ぐ：相手を管理者にして、自分は一般団員になる
       adminOnly();
