@@ -38,7 +38,7 @@ function setData(d) {
 async function sync() {
   busy(1);
   try {
-    const d = await call("sync");
+    const d = await callWithTimeout("sync", {}, 45000);
     if (!d.me) { // 登録が消された・無効になった
       setToken(""); try { localStorage.removeItem(CACHE_KEY); } catch {} state.data = null; $("#nav").hidden = true; return showJoin();
     }
@@ -50,6 +50,8 @@ async function sync() {
   finally { busy(-1); }
 }
 function showError(msg) {
+  window.__booted = true;
+  if (CFG.BOOT_ERROR) msg = (msg || "") + "（サーバー：" + CFG.BOOT_ERROR + "）";
   $("#app").innerHTML = `<div class="card" style="border:2px solid #c62828"><h3>読み込めませんでした</h3>
     <p>${esc(msg || "通信エラー")}</p>
     <p class="muted">電波のよい所でもう一度試してください。続くときは、この画面を管理者に見せてください。</p>
@@ -683,4 +685,8 @@ function renderMembers() {
   }));
 }
 
-try { boot(); } catch (e) { console.error(e); showError("起動でエラー：" + e.message); }
+window.addEventListener("unhandledrejection", (ev) => {
+  const m = ev.reason && ev.reason.message || String(ev.reason);
+  if (!state.data) showError("エラー：" + m); else toast("エラー：" + m);
+});
+try { boot(); window.__booted = true; } catch (e) { console.error(e); showError("起動でエラー：" + e.message); }
