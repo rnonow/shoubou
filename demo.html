@@ -63,6 +63,16 @@ const CFG = window.APP_CONFIG || {};
 const DEMO = CFG.MODE !== "gas";
 const KINDS = ["火災", "救助", "水害・災害", "警戒", "捜索", "訓練", "その他"];
 const TOKEN_KEY = "shobodan_token", CACHE_KEY = "shobodan_cache_v2";
+// 登録（token）は「ページのURL（?k=…）」と「端末内の保存」の両方に持つ。
+// iPhone などではアプリを閉じると端末内の保存が消えることがあるので、URL側が本命。
+let token = CFG.TOKEN || safeGet(TOKEN_KEY) || "";
+function safeGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function setToken(t) {
+  token = t || "";
+  try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {}
+  // 画面上部のURLを書き換える（ホーム画面に追加・ブックマークするとこのURLが保存される）
+  if (!DEMO && window.google?.script?.history) google.script.history.replace(null, t ? { k: t } : {}, "");
+}
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const state = { data: null, tab: "events", year: new Date().getFullYear(), past: false, focusEvent: null, pending: 0 };
@@ -75,7 +85,7 @@ function call(action, body = {}) {
     google.script.run
       .withSuccessHandler(ok)
       .withFailureHandler((e) => ng(new Error(String(e && e.message || e).replace(/^Error:\s*/, ""))))
-      .api(action, body, localStorage.getItem(TOKEN_KEY) || "");
+      .api(action, body, token);
   });
 }
 function busy(d) { state.pending += d; $("#sync").hidden = state.pending <= 0; }
@@ -90,7 +100,7 @@ async function sync() {
   try {
     const d = await call("sync");
     if (!d.me) { // 登録が消された・無効になった
-      localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(CACHE_KEY); state.data = null; $("#nav").hidden = true; return showJoin();
+      setToken(""); try { localStorage.removeItem(CACHE_KEY); } catch {} state.data = null; $("#nav").hidden = true; return showJoin();
     }
     setData(d);
   } catch (e) { toast("更新できませんでした：" + e.message); }
@@ -118,11 +128,13 @@ function mock(action, b) {
   if (action !== "sync") {
     if (action === "join") {
       if (b.code !== db.code) throw new Error("参加コードが違います（お試しモードは " + db.code + "）");
-      me = { id: meId, name: b.name || "あなた", is_admin: true }; db.members.push(me); result = { token: "demo" };
+      if (!me) { me = { id: meId, name: b.name || "あなた", is_admin: true }; db.members.push(me); }
+      result = { token: "demo" };
     } else switch (action) {
       case "members.rename": me.name = b.name; break;
       case "members.setAdmin": db.members.find((m) => m.id === b.id).is_admin = !!b.is_admin; break;
       case "settings.setJoinCode": if (String(b.code).length < 4) throw new Error("参加コードは4文字以上にしてください。"); db.code = b.code; break;
+      case "members.logoutAll": result = { ok: true, count: db.members.length - 1 }; break;
       case "members.remove": db.members = db.members.filter((m) => m.id !== b.id); break;
       case "dispatches.add": result = { id: String(++db.seq) };
         db.dispatches.push({ id: result.id, date: b.date, start_time: b.start_time, end_time: b.end_time, kind: b.kind, place: b.place, note: b.note, created_by: meId, dispatch_members: (b.member_ids || []).map((x) => ({ member_id: x })) }); break;
@@ -189,15 +201,19 @@ function boot() {
   const focus = CFG.FOCUS_EVENT || new URLSearchParams(location.search).get("event");
   if (focus) { state.focusEvent = String(focus); state.tab = "events"; }
   document.querySelectorAll("#nav button").forEach((b) => (b.onclick = () => { state.tab = b.dataset.tab; state.focusEvent = null; render(); window.scrollTo(0, 0); }));
-  if (!localStorage.getItem(TOKEN_KEY)) return showJoin();
-  // 前回のデータですぐ表示して、裏で最新に更新
-  try { const c = JSON.parse(localStorage.getItem(CACHE_KEY) || "null"); if (c && c.me) { state.data = c; render(); } } catch {}
-  sync();
+  if (!token) return showJoin();
+  if (!CFG.TOKEN) setToken(token); // 端末内にだけ残っていた登録をURLにも反映
+  else try { localStorage.setItem(TOKEN_KEY, token); } catch {}
+  // サーバーが埋め込んだデータ、なければ前回のデータですぐ表示して、裏で最新に更新
+  let first = null;
+  try { first = CFG.INITIAL ? JSON.parse(CFG.INITIAL) : JSON.parse(safeGet(CACHE_KEY) || "null"); } catch {}
+  if (first && first.me) { CFG.INITIAL ? setData(first) : ((state.data = first), render()); }
+  if (!CFG.INITIAL) sync();
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && state.data) sync(); });
 }
 function showJoin() {
   $("#app").innerHTML = `<div class="card"><h2>団員登録</h2>
-    <p class="muted">はじめて使うときだけ、団から聞いた参加コードを入力してください。${DEMO ? "（お試しモードは 1234）" : ""}<br>登録はこの端末（このブラウザ）に記憶されます。</p>
+    <p class="muted">はじめて使うときだけ、団から聞いた参加コードを入力してください。${DEMO ? "（お試しモードは 1234）" : ""}<br>登録はこの端末（このブラウザ）に記憶されます。<br><b>前に登録したことがある人は、前と同じ名前</b>で入ると、これまでの記録がそのまま使えます。</p>
     <label>名前（団内で呼ばれている名前）</label><input id="jn">
     <label>参加コード</label><input id="jc" inputmode="numeric">
     <p><button class="btn" id="jb">登録する</button></p></div>`;
@@ -205,10 +221,24 @@ function showJoin() {
     $("#jb").disabled = true; $("#jb").textContent = "登録中…";
     try {
       const d = await call("join", { name: $("#jn").value, code: $("#jc").value });
-      localStorage.setItem(TOKEN_KEY, d.result.token);
+      setToken(d.result.token);
       setData(d);
+      if (!DEMO) showSaveTip(d.result.rejoined ? true : undefined);
     } catch (e) { toast(e.message); $("#jb").disabled = false; $("#jb").textContent = "登録する"; }
   };
+}
+function showSaveTip(rejoined) {
+  const box = document.createElement("div");
+  box.className = "card"; box.id = "savetip"; box.style.border = "2px solid #06c755";
+  box.innerHTML = `<h3>${rejoined === true ? "おかえりなさい。前の登録を引き継ぎました" : rejoined === false ? "この端末を保存する" : "登録できました"}</h3>
+    <p>次から参加コードを入れなくて済むように、<b>今のこの画面を</b>保存してください。</p>
+    <p class="muted">・iPhone（Safari）：下の共有ボタン □↑ →「ホーム画面に追加」<br>
+    ・Android（Chrome）：右上の ︙ →「ホーム画面に追加」<br>
+    ・LINEの中で開いている場合：右下の … →「ブラウザで開く」してから上の方法で</p>
+    <p class="muted">このリンクはあなた専用です。グループには送らないでください。</p>
+    <button class="btn small" id="tipok">わかった</button>`;
+  document.getElementById("savetip")?.remove(); $("#app").before(box); window.scrollTo(0, 0);
+  $("#tipok").onclick = () => box.remove();
 }
 function render() {
   if (!state.data) return;
@@ -367,13 +397,19 @@ function renderMembers() {
   const ms = state.data.members;
   $("#app").innerHTML = `
     <div class="card"><h3>自分の表示名</h3><div class="row"><input id="mn" value="${esc(me().name)}" style="flex:1"><button class="btn small" id="mb">変更</button></div></div>
+    ${DEMO ? "" : `<div class="card"><h3>毎回コードを聞かれるときは</h3><p class="muted">この画面をホーム画面に追加（ブックマーク）すると、次から入力不要になります。</p><button class="btn sub small" id="savebtn">保存のしかたを見る</button></div>`}
     <h2>団員一覧（${ms.length}人）</h2>
     <div class="card"><table>${ms.map((m) => `<tr><td>${esc(m.name)}${m.is_admin ? ' <span class="tag">管理者</span>' : ""}</td>
       <td class="n">${me().is_admin && m.id !== me().id ? `<button class="btn sub small" data-adm="${m.id}" data-v="${m.is_admin ? "" : "1"}">${m.is_admin ? "管理者を外す" : "管理者にする"}</button> <button class="btn sub small" data-rm="${m.id}">外す</button>` : ""}</td></tr>`).join("")}</table></div>
     <p class="muted">新しい団員には、このアプリのURLと参加コードを伝えてください。知らない名前があれば、管理者が「外す」で削除できます。</p>
     ${me().is_admin ? `<div class="card"><h3>参加コード（管理者だけに表示）</h3>
       <p class="muted">今のコード：<b>${esc(state.data.join_code)}</b><br>URLが団の外に漏れたときは変更してください。登録済みの団員はそのまま使えます。</p>
-      <div class="row"><input id="nc" placeholder="新しい参加コード（4文字以上）" style="flex:1"><button class="btn small" id="ncb">変更</button></div></div>` : ""}`;
+      <div class="row"><input id="nc" placeholder="新しい参加コード（4文字以上）" style="flex:1"><button class="btn small" id="ncb">変更</button></div></div>
+    <div class="card"><h3>全員をログアウト（管理者だけに表示）</h3>
+      <p class="muted">あなた以外の全員が、次に開いたときに参加コードの入力からやり直しになります。同じ名前で入り直せば、記録や出欠はそのまま残ります。<br>
+      知らない人に入られたかもしれないときは、先に参加コードを変えてから使ってください。</p>
+      <button class="btn sub" id="lo">全員をログアウトする</button></div>` : ""}`;
+  if (!DEMO) $("#savebtn").onclick = () => showSaveTip(false);
   $("#mb").onclick = () => {
     const name = $("#mn").value.trim(); if (!name) return;
     mutate("members.rename", { name }, (d) => { d.me.name = name; d.members.find((m) => m.id === d.me.id).name = name; }).catch(ignore);
@@ -384,6 +420,10 @@ function renderMembers() {
     $("#nc").value = "";
     mutate("settings.setJoinCode", { code }, (d) => (d.join_code = code)).catch(ignore);
     toast("参加コードを変更しました");
+  };
+  if (me().is_admin) $("#lo").onclick = () => {
+    if (!confirm("あなた以外の全員をログアウトします。よろしいですか？")) return;
+    mutate("members.logoutAll", {}).then((r) => toast(`${r.count}人をログアウトしました`)).catch(ignore);
   };
   document.querySelectorAll("[data-adm]").forEach((b) => (b.onclick = () => {
     const id = b.dataset.adm, v = !!b.dataset.v;

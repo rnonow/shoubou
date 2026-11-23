@@ -39,7 +39,13 @@ function setup() {
 
 function doGet(e) {
   var t = HtmlService.createTemplateFromFile('index');
-  t.focusEvent = (e && e.parameter && e.parameter.event) || '';
+  var p = (e && e.parameter) || {};
+  t.focusEvent = p.event || '';
+  // 登録はURLの k=… に持たせる（iPhoneなどではアプリを閉じると端末内の保存が消えることがあるため）
+  t.token = p.k || '';
+  // 最初の画面に必要なデータを一緒に埋め込み、開いてすぐ表示できるようにする
+  var first = t.token ? sync_(t.token) : null;
+  t.initial = first && first.me ? JSON.stringify(first) : '';
   t.appUrl = ScriptApp.getService().getUrl();
   t.teamName = setting_(2) || '消防団';
   return t.evaluate()
@@ -80,6 +86,11 @@ function newId_() { return Utilities.getUuid().slice(0, 8); }
 function now_() { return new Date().toISOString(); }
 function pubMember_(m) { return { id: m.id, name: m.name, is_admin: m.is_admin === 'true' }; }
 function fail_(msg) { throw new Error(msg); }
+// 1人の団員が複数の端末（スマホのブラウザとLINE内ブラウザなど）で使えるよう、token 列はカンマ区切りで複数持てる
+function hasToken_(m, token) { return !!token && String(m.token || '').split(',').indexOf(token) >= 0; }
+function findByToken_(list, token) { return token ? list.filter(function (m) { return hasToken_(m, token); })[0] : null; }
+function normName_(s) { return String(s || '').normalize('NFKC').replace(/\s+/g, ''); }
+var MAX_DEVICES = 5;
 
 // ---------- 画面から呼ばれる入口 ----------
 // 画面は action='sync' で全データを1回で受け取り、変更系の操作も最新の全データを返す。
@@ -117,7 +128,7 @@ function load_() {
 
 function sync_(token) {
   var d = load_();
-  var me = token ? d.members.filter(function (m) { return m.token === token; })[0] : null;
+  var me = findByToken_(d.members, token);
   if (!me) return { me: null };
   var byEvent = {};
   d.rsvps.forEach(function (r) {
@@ -142,13 +153,23 @@ function sync_(token) {
 /** 変更系の操作（ロック中に実行） */
 function mutate_(action, b, token) {
   var members = rows_('members');
-  var me = token ? members.filter(function (m) { return m.token === token; })[0] : null;
+  var me = findByToken_(members, token);
 
   if (action === 'join') {
     var code = setting_(1);
     if (!code || String(b.code || '').trim() !== code) fail_('参加コードが違います。');
     var name = String(b.name || '').trim(); if (!name) fail_('名前を入れてください。');
-    var m = { id: newId_(), name: name, token: Utilities.getUuid(), is_admin: members.length === 0 ? 'true' : 'false', created_at: now_() };
+    var newToken = Utilities.getUuid();
+    // 同じ名前の団員がいれば、その人として入り直す（記録・出欠・管理者権限を引き継ぐ）
+    var same = members.filter(function (x) { return normName_(x.name) === normName_(name); })[0];
+    if (same) {
+      var toks = String(same.token || '').split(',').filter(String);
+      toks.push(newToken);
+      same.token = toks.slice(-MAX_DEVICES).join(',');
+      update_('members', same._row, same);
+      return { token: newToken, rejoined: true };
+    }
+    var m = { id: newId_(), name: name, token: newToken, is_admin: members.length === 0 ? 'true' : 'false', created_at: now_() };
     append_('members', m);
     return { token: m.token };
   }
@@ -170,6 +191,15 @@ function mutate_(action, b, token) {
       adminOnly();
       var t = members.filter(function (m) { return m.id === b.id; })[0]; if (!t) fail_('団員が見つかりません。');
       t.is_admin = b.is_admin ? 'true' : 'false'; update_('members', t._row, t); return { ok: true };
+
+    case 'members.logoutAll': // 全員をログアウト（自分のこの端末だけ残す）。団員の記録は消えない
+      adminOnly();
+      var sh = sheet_('members');
+      if (members.length) {
+        var col = SHEETS.members.indexOf('token') + 1;
+        sh.getRange(2, col, members.length, 1).setValues(members.map(function (x) { return [x.id === me.id ? token : '']; }));
+      }
+      return { ok: true, count: members.length - 1 };
 
     case 'settings.setJoinCode':
       adminOnly();
