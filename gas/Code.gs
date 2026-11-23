@@ -190,7 +190,17 @@ function mutate_(action, b, token) {
     case 'members.setAdmin':
       adminOnly();
       var t = members.filter(function (m) { return m.id === b.id; })[0]; if (!t) fail_('団員が見つかりません。');
+      if (!b.is_admin && members.filter(function (m) { return m.is_admin === 'true' && m.id !== t.id; }).length === 0) fail_('管理者が1人もいなくなるため外せません。');
       t.is_admin = b.is_admin ? 'true' : 'false'; update_('members', t._row, t); return { ok: true };
+
+    case 'members.transferAdmin': // 管理者を引き継ぐ：相手を管理者にして、自分は一般団員になる
+      adminOnly();
+      var to = members.filter(function (m) { return m.id === b.id; })[0];
+      if (!to) fail_('団員が見つかりません。');
+      if (to.id === me.id) fail_('自分自身には引き継げません。');
+      to.is_admin = 'true'; update_('members', to._row, to);
+      me.is_admin = 'false'; update_('members', me._row, me);
+      return { ok: true, to: to.name };
 
     case 'members.logoutAll': // 全員をログアウト（自分のこの端末だけ残す）。団員の記録は消えない
       adminOnly();
