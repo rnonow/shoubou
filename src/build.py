@@ -16,6 +16,7 @@ def page(cfg, title):
 <div id="demo" hidden>お試しモード：データはこの端末だけに保存されます</div>
 <main id="app"><p class="muted">読み込み中…</p></main>
 <nav id="nav" hidden>
+  <button data-tab="notices">📢<br>お知らせ</button>
   <button data-tab="events">📅<br>イベント</button>
   <button data-tab="dispatches">🔥<br>出動記録</button>
   <button data-tab="members">👥<br>団員</button>

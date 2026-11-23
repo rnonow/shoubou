@@ -10,8 +10,9 @@ var SHEETS = {
   dispatches:['id', 'date', 'kind', 'place', 'note', 'member_ids', 'created_by', 'created_at', 'start_time', 'end_time'],
   events:    ['id', 'title', 'starts_at', 'place', 'note', 'created_by', 'created_at', 'ends_at'],
   rsvps:     ['event_id', 'member_id', 'status', 'comment', 'updated_at'],
+  notices:   ['id', 'title', 'body', 'image_ids', 'created_by', 'created_at'],
 };
-var SHEET_NAMES = { members: '団員', dispatches: '出動記録', events: 'イベント', rsvps: '出欠' };
+var SHEET_NAMES = { members: '団員', dispatches: '出動記録', events: 'イベント', rsvps: '出欠', notices: 'お知らせ' };
 var SETTINGS = '設定';
 var ROLES = ['部長', '副部長', '会計']; // 各1人まで
 
@@ -56,7 +57,17 @@ function doGet(e) {
 }
 
 // ---------- データ操作の共通部品 ----------
-function sheet_(key) { return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAMES[key]); }
+function sheet_(key) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(SHEET_NAMES[key]);
+  if (!sh) { // 新しく増えたシートは自動で作る（setup の再実行は不要）
+    sh = ss.insertSheet(SHEET_NAMES[key]);
+    sh.getRange(1, 1, 1, SHEETS[key].length).setValues([SHEETS[key]]).setFontWeight('bold');
+    sh.getRange('A:Z').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
 function setting_(row) { var st = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SETTINGS); return st ? String(st.getRange(row, 2).getValue()).trim() : ''; }
 function rows_(key) {
   var sh = sheet_(key), cols = SHEETS[key], n = sh.getLastRow() - 1;
@@ -100,11 +111,14 @@ var MAX_DEVICES = 5;
 // ---------- 画面から呼ばれる入口 ----------
 // 画面は action='sync' で全データを1回で受け取り、変更系の操作も最新の全データを返す。
 // 読み取りはキャッシュ（CacheService）から返すので、スプレッドシートを毎回読まない。
-var CACHE_KEY = 'snapshot_v2';
+var CACHE_KEY = 'snapshot_v3';
 
 function api(action, body, token) {
   body = body || {};
   if (action === 'sync') return sync_(token);
+  if (action === 'notices.image') return noticeImage_(token, body.notice_id, body.file_id);
+  // 時間のかかる処理（ドライブへの保存）はロックの外で先に行う
+  if (action === 'notices.add') { requireMember_(token); body.image_ids = saveImages_(body.images || []); delete body.images; }
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   var result;
@@ -123,7 +137,7 @@ function load_() {
   var hit = cache.get(CACHE_KEY);
   if (hit) return JSON.parse(hit);
   var d = {
-    members: rows_('members'), events: rows_('events'), rsvps: rows_('rsvps'), dispatches: rows_('dispatches'),
+    members: rows_('members'), events: rows_('events'), rsvps: rows_('rsvps'), dispatches: rows_('dispatches'), notices: rows_('notices'),
     join_code: setting_(1), team_name: setting_(2),
   };
   var json = JSON.stringify(d);
@@ -148,6 +162,10 @@ function sync_(token) {
     dispatches: d.dispatches.map(function (x) {
       return { id: x.id, date: x.date, start_time: x.start_time, end_time: x.end_time, kind: x.kind, place: x.place, note: x.note, created_by: x.created_by,
                dispatch_members: x.member_ids ? x.member_ids.split(',').map(function (m) { return { member_id: m }; }) : [] };
+    }),
+    notices: (d.notices || []).map(function (n) {
+      return { id: n.id, title: n.title, body: n.body, image_ids: n.image_ids ? n.image_ids.split(',') : [], created_by: n.created_by,
+               created_at: n.created_at };
     }),
     team_name: d.team_name,
   };
@@ -245,6 +263,18 @@ function mutate_(action, b, token) {
       if (!canEdit(dd.created_by)) fail_('記録した本人か管理者だけが削除できます。');
       sheet_('dispatches').deleteRow(dd._row); return { ok: true };
 
+    case 'notices.add':
+      if (!String(b.title || '').trim()) fail_('タイトルを入れてください。');
+      var nt = { id: newId_(), title: String(b.title).trim(), body: b.body || '', image_ids: (b.image_ids || []).join(','), created_by: me.id, created_at: now_() };
+      append_('notices', nt); return { id: nt.id };
+
+    case 'notices.delete':
+      var nd = rows_('notices').filter(function (x) { return x.id === b.id; })[0];
+      if (!nd) return { ok: true };
+      if (!canEdit(nd.created_by)) fail_('書いた本人か管理者だけが削除できます。');
+      if (nd.image_ids) nd.image_ids.split(',').forEach(function (fid) { try { DriveApp.getFileById(fid).setTrashed(true); } catch (e) {} });
+      sheet_('notices').deleteRow(nd._row); return { ok: true };
+
     case 'events.add':
       if (!b.title || !b.starts_at) fail_('タイトルと日時は必須です。');
       var ev = { id: newId_(), title: b.title, starts_at: b.starts_at, ends_at: b.ends_at, place: b.place, note: b.note, created_by: me.id, created_at: now_() };
@@ -269,6 +299,54 @@ function mutate_(action, b, token) {
 
 /** スプレッドシートを手で書き換えたら自動でキャッシュを消す */
 function onEdit() { clearCache(); }
+
+// ---------- お知らせの写真（Googleドライブに非公開で保存） ----------
+var IMAGE_FOLDER = '消防団アプリ_お知らせ写真';
+var MAX_IMAGES = 6;
+
+function requireMember_(token) {
+  var me = findByToken_(load_().members, token);
+  if (!me) fail_('登録が確認できません。もう一度参加コードを入力してください。');
+  return me;
+}
+function imageFolder_() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty('IMAGE_FOLDER_ID');
+  if (id) { try { return DriveApp.getFolderById(id); } catch (e) {} }
+  var f = DriveApp.createFolder(IMAGE_FOLDER); // 共有設定はしない（団専用アカウントだけが見られる）
+  props.setProperty('IMAGE_FOLDER_ID', f.getId());
+  return f;
+}
+function saveImages_(images) {
+  if (images.length > MAX_IMAGES) fail_('写真は' + MAX_IMAGES + '枚までです。');
+  if (!images.length) return [];
+  var folder = imageFolder_();
+  return images.map(function (img, i) {
+    var m = String(img.data || '').match(/^data:(image\/[a-z+.-]+);base64,(.+)$/);
+    if (!m) fail_('写真の形式が読めませんでした。');
+    var blob = Utilities.newBlob(Utilities.base64Decode(m[2]), m[1], 'notice_' + now_().replace(/[:.]/g, '') + '_' + (i + 1) + '.jpg');
+    return folder.createFile(blob).getId();
+  });
+}
+function findNotice_(id) {
+  var n = (load_().notices || []).filter(function (x) { return x.id === id; })[0];
+  if (!n) fail_('お知らせが見つかりません。');
+  return n;
+}
+/** 写真は団員だけに、お知らせに付いているものだけを返す（ドライブの他のファイルは読めない） */
+function noticeImage_(token, noticeId, fileId) {
+  requireMember_(token);
+  var n = findNotice_(noticeId);
+  if (!n.image_ids || n.image_ids.split(',').indexOf(fileId) < 0) fail_('写真が見つかりません。');
+  var blob = DriveApp.getFileById(fileId).getBlob();
+  return { data: 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes()) };
+}
+
+/** 最初に1回だけ（または機能追加でGoogleに「承認が必要」と言われたときに）実行する */
+function authorize() {
+  DriveApp.getRootFolder();
+  Logger.log('承認できました。アプリはそのまま使えます。');
+}
 
 /** スプレッドシートを手で直接書き換えたあとは、これを実行するとすぐ画面に反映される（放っておいても6時間で反映） */
 function clearCache() { CacheService.getScriptCache().remove(CACHE_KEY); }
