@@ -138,8 +138,18 @@ async function sync() {
       setToken(""); try { localStorage.removeItem(CACHE_KEY); } catch {} state.data = null; $("#nav").hidden = true; return showJoin();
     }
     setData(d);
-  } catch (e) { toast("更新できませんでした：" + e.message); }
+  } catch (e) {
+    if (!state.data) showError(e.message); // 何も表示できていないときは、止まったままにせず理由を出す
+    else toast("更新できませんでした：" + e.message);
+  }
   finally { busy(-1); }
+}
+function showError(msg) {
+  $("#app").innerHTML = `<div class="card" style="border:2px solid #c62828"><h3>読み込めませんでした</h3>
+    <p>${esc(msg || "通信エラー")}</p>
+    <p class="muted">電波のよい所でもう一度試してください。続くときは、この画面を管理者に見せてください。</p>
+    <p><button class="btn" id="retry">もう一度読み込む</button></p></div>`;
+  $("#retry").onclick = () => { $("#app").innerHTML = '<p class="muted">読み込み中…</p>'; sync(); };
 }
 /** 画面を先に書き換え（optimistic）、裏でサーバーに送る。失敗したら最新データに戻す */
 async function mutate(action, body, optimistic) {
@@ -256,6 +266,8 @@ const ignore = () => {}; // 失敗時の表示は mutate が行う
 
 // ---------- 起動 ----------
 function boot() {
+  // 30秒たっても何も出ないときは、止まったままにしない
+  setTimeout(() => { if (!state.data && /読み込み中/.test($("#app").textContent)) showError("時間がかかりすぎています。"); }, 30000);
   $("#team").textContent = "🚒 " + (CFG.TEAM_NAME || "消防団");
   $("header").insertAdjacentHTML("beforeend", '<span id="sync" hidden>更新中…</span>');
   if (DEMO) $("#demo").hidden = false;
@@ -269,6 +281,7 @@ function boot() {
   let first = null;
   try { first = CFG.INITIAL ? JSON.parse(CFG.INITIAL) : JSON.parse(safeGet(CACHE_KEY) || "null"); } catch {}
   if (first && first.me) { CFG.INITIAL ? setData(first) : ((state.data = first), render()); }
+  if (CFG.BOOT_ERROR) console.warn("server:", CFG.BOOT_ERROR);
   if (!CFG.INITIAL) sync();
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && state.data) sync(); });
 }
@@ -303,6 +316,9 @@ function showSaveTip(rejoined) {
 }
 function render() {
   if (!state.data) return;
+  try { renderInner(); } catch (e) { console.error(e); showError("画面の表示でエラー：" + e.message); }
+}
+function renderInner() {
   $("#nav").hidden = false;
   $("#who").textContent = me().name + (me().is_admin ? "（管理者）" : "");
   document.querySelectorAll("#nav button").forEach((b) => b.classList.toggle("on", b.dataset.tab === state.tab));
@@ -737,6 +753,6 @@ function renderMembers() {
   }));
 }
 
-boot();
+try { boot(); } catch (e) { console.error(e); showError("起動でエラー：" + e.message); }
 </script>
 </body></html>
