@@ -19,6 +19,7 @@ const url = process.env.APP_URL;
         const r = await f.evaluate(() => ({
           stage: window.__stage, booted: window.__booted, cfg: !!window.APP_CONFIG,
           scripts: [...document.scripts].map((s) => (s.src ? 'src' : 'inline') + ':' + s.text.length),
+          big: [...document.scripts].filter((s) => s.text.length > 20000 && s.text.includes('__stage')).map((s) => ({ head: s.text.slice(0, 300), tail: s.text.slice(-600) })),
           text: document.body ? document.body.innerText.replace(/\s+/g, ' ').slice(0, 300) : '',
         }));
         console.log('frame', f.url().replace(/\?.*/, '').slice(0, 90), JSON.stringify(r));
