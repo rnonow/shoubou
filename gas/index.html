@@ -106,12 +106,15 @@ nav .ic{font-size:30px;line-height:1.1}
     d.querySelector("p").textContent = t;
     a.innerHTML = ""; a.appendChild(d); window.__booted = true;
   }
+  window.__stage = "見張り開始";
+  window.addEventListener("error", function (ev) { show("エラー：" + (ev.message || "不明") + (ev.lineno ? "（" + ev.lineno + "行目）" : "")); }, true);
   window.onerror = function (m, s, l, c) { show("エラー：" + m + (l ? "（" + l + "行目）" : "")); };
-  setTimeout(function () { show("起動に時間がかかりすぎています（ブラウザ：" + navigator.userAgent.replace(/^.*?\(/, "(").slice(0, 80) + "）"); }, 40000);
+  setTimeout(function () { var c = window.APP_CONFIG; show("起動に時間がかかりすぎています［" + window.__stage + "／設定" + (c ? (c.MODE || "?") + (c.INITIAL ? c.INITIAL.length : 0) + (c.TOKEN ? "T" : "") : "なし") + "／" + (window.google && google.script && google.script.run ? "run有" : "run無") + "］（ブラウザ：" + navigator.userAgent.replace(/^.*?\(/, "(").slice(0, 60) + "）"); }, 40000);
 })();
 </script>
 <script>
 "use strict";
+window.__stage = "本体開始";
 const CFG = window.APP_CONFIG || {};
 const DEMO = CFG.MODE !== "gas";
 const KINDS = ["火災", "救助", "水害・災害", "警戒", "捜索", "訓練", "その他"];
@@ -286,6 +289,7 @@ const ignore = () => {}; // 失敗時の表示は mutate が行う
 
 // ---------- 起動 ----------
 function boot() {
+  window.__stage = "起動開始";
   // 30秒たっても何も出ないときは、止まったままにしない
   setTimeout(() => { if (!state.data && /読み込み中/.test($("#app").textContent)) showError("時間がかかりすぎています。"); }, 30000);
   $("#team").textContent = "🚒 " + (CFG.TEAM_NAME || "消防団");
@@ -802,6 +806,7 @@ window.addEventListener("unhandledrejection", (ev) => {
   const m = ev.reason && ev.reason.message || String(ev.reason);
   if (!state.data) showError("エラー：" + m); else toast("エラー：" + m);
 });
+window.__stage = "本体読込完了";
 try { boot(); window.__booted = true; } catch (e) { console.error(e); showError("起動でエラー：" + e.message); }
 </script>
 </body></html>

@@ -1,4 +1,5 @@
 "use strict";
+window.__stage = "本体開始";
 const CFG = window.APP_CONFIG || {};
 const DEMO = CFG.MODE !== "gas";
 const KINDS = ["火災", "救助", "水害・災害", "警戒", "捜索", "訓練", "その他"];
@@ -173,6 +174,7 @@ const ignore = () => {}; // 失敗時の表示は mutate が行う
 
 // ---------- 起動 ----------
 function boot() {
+  window.__stage = "起動開始";
   // 30秒たっても何も出ないときは、止まったままにしない
   setTimeout(() => { if (!state.data && /読み込み中/.test($("#app").textContent)) showError("時間がかかりすぎています。"); }, 30000);
   $("#team").textContent = "🚒 " + (CFG.TEAM_NAME || "消防団");
@@ -689,4 +691,5 @@ window.addEventListener("unhandledrejection", (ev) => {
   const m = ev.reason && ev.reason.message || String(ev.reason);
   if (!state.data) showError("エラー：" + m); else toast("エラー：" + m);
 });
+window.__stage = "本体読込完了";
 try { boot(); window.__booted = true; } catch (e) { console.error(e); showError("起動でエラー：" + e.message); }
