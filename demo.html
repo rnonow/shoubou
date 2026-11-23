@@ -118,11 +118,13 @@ function mock(action, b) {
   if (action !== "sync") {
     if (action === "join") {
       if (b.code !== db.code) throw new Error("参加コードが違います（お試しモードは " + db.code + "）");
-      me = { id: meId, name: b.name || "あなた", is_admin: true }; db.members.push(me); result = { token: "demo" };
+      if (!me) { me = { id: meId, name: b.name || "あなた", is_admin: true }; db.members.push(me); }
+      result = { token: "demo" };
     } else switch (action) {
       case "members.rename": me.name = b.name; break;
       case "members.setAdmin": db.members.find((m) => m.id === b.id).is_admin = !!b.is_admin; break;
       case "settings.setJoinCode": if (String(b.code).length < 4) throw new Error("参加コードは4文字以上にしてください。"); db.code = b.code; break;
+      case "members.logoutAll": result = { ok: true, count: db.members.length - 1 }; break;
       case "members.remove": db.members = db.members.filter((m) => m.id !== b.id); break;
       case "dispatches.add": result = { id: String(++db.seq) };
         db.dispatches.push({ id: result.id, date: b.date, start_time: b.start_time, end_time: b.end_time, kind: b.kind, place: b.place, note: b.note, created_by: meId, dispatch_members: (b.member_ids || []).map((x) => ({ member_id: x })) }); break;
@@ -197,7 +199,7 @@ function boot() {
 }
 function showJoin() {
   $("#app").innerHTML = `<div class="card"><h2>団員登録</h2>
-    <p class="muted">はじめて使うときだけ、団から聞いた参加コードを入力してください。${DEMO ? "（お試しモードは 1234）" : ""}<br>登録はこの端末（このブラウザ）に記憶されます。</p>
+    <p class="muted">はじめて使うときだけ、団から聞いた参加コードを入力してください。${DEMO ? "（お試しモードは 1234）" : ""}<br>登録はこの端末（このブラウザ）に記憶されます。<br><b>前に登録したことがある人は、前と同じ名前</b>で入ると、これまでの記録がそのまま使えます。</p>
     <label>名前（団内で呼ばれている名前）</label><input id="jn">
     <label>参加コード</label><input id="jc" inputmode="numeric">
     <p><button class="btn" id="jb">登録する</button></p></div>`;
@@ -207,6 +209,7 @@ function showJoin() {
       const d = await call("join", { name: $("#jn").value, code: $("#jc").value });
       localStorage.setItem(TOKEN_KEY, d.result.token);
       setData(d);
+      if (d.result.rejoined) toast("おかえりなさい。前の登録を引き継ぎました");
     } catch (e) { toast(e.message); $("#jb").disabled = false; $("#jb").textContent = "登録する"; }
   };
 }
@@ -373,7 +376,11 @@ function renderMembers() {
     <p class="muted">新しい団員には、このアプリのURLと参加コードを伝えてください。知らない名前があれば、管理者が「外す」で削除できます。</p>
     ${me().is_admin ? `<div class="card"><h3>参加コード（管理者だけに表示）</h3>
       <p class="muted">今のコード：<b>${esc(state.data.join_code)}</b><br>URLが団の外に漏れたときは変更してください。登録済みの団員はそのまま使えます。</p>
-      <div class="row"><input id="nc" placeholder="新しい参加コード（4文字以上）" style="flex:1"><button class="btn small" id="ncb">変更</button></div></div>` : ""}`;
+      <div class="row"><input id="nc" placeholder="新しい参加コード（4文字以上）" style="flex:1"><button class="btn small" id="ncb">変更</button></div></div>
+    <div class="card"><h3>全員をログアウト（管理者だけに表示）</h3>
+      <p class="muted">あなた以外の全員が、次に開いたときに参加コードの入力からやり直しになります。同じ名前で入り直せば、記録や出欠はそのまま残ります。<br>
+      知らない人に入られたかもしれないときは、先に参加コードを変えてから使ってください。</p>
+      <button class="btn sub" id="lo">全員をログアウトする</button></div>` : ""}`;
   $("#mb").onclick = () => {
     const name = $("#mn").value.trim(); if (!name) return;
     mutate("members.rename", { name }, (d) => { d.me.name = name; d.members.find((m) => m.id === d.me.id).name = name; }).catch(ignore);
@@ -384,6 +391,10 @@ function renderMembers() {
     $("#nc").value = "";
     mutate("settings.setJoinCode", { code }, (d) => (d.join_code = code)).catch(ignore);
     toast("参加コードを変更しました");
+  };
+  if (me().is_admin) $("#lo").onclick = () => {
+    if (!confirm("あなた以外の全員をログアウトします。よろしいですか？")) return;
+    mutate("members.logoutAll", {}).then((r) => toast(`${r.count}人をログアウトしました`)).catch(ignore);
   };
   document.querySelectorAll("[data-adm]").forEach((b) => (b.onclick = () => {
     const id = b.dataset.adm, v = !!b.dataset.v;
