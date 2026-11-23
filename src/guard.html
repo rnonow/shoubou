@@ -9,7 +9,9 @@
     d.querySelector("p").textContent = t;
     a.innerHTML = ""; a.appendChild(d); window.__booted = true;
   }
+  window.__stage = "見張り開始";
+  window.addEventListener("error", function (ev) { show("エラー：" + (ev.message || "不明") + (ev.lineno ? "（" + ev.lineno + "行目）" : "")); }, true);
   window.onerror = function (m, s, l, c) { show("エラー：" + m + (l ? "（" + l + "行目）" : "")); };
-  setTimeout(function () { show("起動に時間がかかりすぎています（ブラウザ：" + navigator.userAgent.replace(/^.*?\(/, "(").slice(0, 80) + "）"); }, 40000);
+  setTimeout(function () { var c = window.APP_CONFIG; show("起動に時間がかかりすぎています［" + window.__stage + "／設定" + (c ? (c.MODE || "?") + (c.INITIAL ? c.INITIAL.length : 0) + (c.TOKEN ? "T" : "") : "なし") + "／" + (window.google && google.script && google.script.run ? "run有" : "run無") + "］（ブラウザ：" + navigator.userAgent.replace(/^.*?\(/, "(").slice(0, 60) + "）"); }, 40000);
 })();
 </script>
