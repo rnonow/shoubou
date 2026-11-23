@@ -1,7 +1,7 @@
 # src/ から gas/index.html（Apps Script用）と demo.html（お試し版）を作る
 import pathlib
 here = pathlib.Path(__file__).parent; root = here.parent
-css = (here / "style.css").read_text(); js = (here / "app.js").read_text()
+css = (here / "style.css").read_text(); js = (here / "app.js").read_text(); guard = (here / "guard.html").read_text()
 def page(cfg, title):
     return f"""<!DOCTYPE html>
 <html lang="ja"><head>
@@ -23,7 +23,7 @@ def page(cfg, title):
   <button data-tab="members"><span class="ic">👥</span>団員</button>
 </nav>
 <div id="toast" hidden></div>
-<script>
+{guard}<script>
 {js}</script>
 </body></html>
 """

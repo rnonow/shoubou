@@ -4,6 +4,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>消防団連絡アプリ</title>
 <style>
+[hidden]{display:none!important}
 *{box-sizing:border-box}
 body{font-family:-apple-system,"Hiragino Sans",system-ui,sans-serif;margin:0;background:#f4f4f5;color:#222;padding-bottom:76px}
 header{background:#c62828;color:#fff;padding:12px 16px;font-weight:bold;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:5}
@@ -95,6 +96,21 @@ nav .ic{font-size:30px;line-height:1.1}
 </nav>
 <div id="toast" hidden></div>
 <script>
+// 本体のプログラムが動かなかったときに、理由を画面に出す（古い書き方で書いてある）
+(function () {
+  function show(t) {
+    if (window.__booted) return;
+    var a = document.getElementById("app"); if (!a) return;
+    var d = document.createElement("div"); d.className = "card"; d.style.border = "2px solid #c62828";
+    d.innerHTML = "<h3>アプリを起動できませんでした</h3><p></p><p class=\"muted\">アプリを完全に閉じてから開き直してください。続くときは、この画面を管理者に見せてください。</p>";
+    d.querySelector("p").textContent = t;
+    a.innerHTML = ""; a.appendChild(d); window.__booted = true;
+  }
+  window.onerror = function (m, s, l, c) { show("エラー：" + m + (l ? "（" + l + "行目）" : "")); };
+  setTimeout(function () { show("起動に時間がかかりすぎています（ブラウザ：" + navigator.userAgent.replace(/^.*?\(/, "(").slice(0, 80) + "）"); }, 40000);
+})();
+</script>
+<script>
 "use strict";
 const CFG = window.APP_CONFIG || {};
 const DEMO = CFG.MODE !== "gas";
@@ -135,7 +151,7 @@ function setData(d) {
 async function sync() {
   busy(1);
   try {
-    const d = await call("sync");
+    const d = await callWithTimeout("sync", {}, 45000);
     if (!d.me) { // 登録が消された・無効になった
       setToken(""); try { localStorage.removeItem(CACHE_KEY); } catch {} state.data = null; $("#nav").hidden = true; return showJoin();
     }
@@ -147,6 +163,8 @@ async function sync() {
   finally { busy(-1); }
 }
 function showError(msg) {
+  window.__booted = true;
+  if (CFG.BOOT_ERROR) msg = (msg || "") + "（サーバー：" + CFG.BOOT_ERROR + "）";
   $("#app").innerHTML = `<div class="card" style="border:2px solid #c62828"><h3>読み込めませんでした</h3>
     <p>${esc(msg || "通信エラー")}</p>
     <p class="muted">電波のよい所でもう一度試してください。続くときは、この画面を管理者に見せてください。</p>
@@ -780,6 +798,10 @@ function renderMembers() {
   }));
 }
 
-try { boot(); } catch (e) { console.error(e); showError("起動でエラー：" + e.message); }
+window.addEventListener("unhandledrejection", (ev) => {
+  const m = ev.reason && ev.reason.message || String(ev.reason);
+  if (!state.data) showError("エラー：" + m); else toast("エラー：" + m);
+});
+try { boot(); window.__booted = true; } catch (e) { console.error(e); showError("起動でエラー：" + e.message); }
 </script>
 </body></html>
