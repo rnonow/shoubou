@@ -16,11 +16,11 @@ def page(cfg, title):
 <div id="demo" hidden>お試しモード：データはこの端末だけに保存されます</div>
 <main id="app"><p class="muted">読み込み中…</p></main>
 <nav id="nav" hidden>
-  <button data-tab="notices">📢<br>お知らせ</button>
-  <button data-tab="events">📅<br>イベント</button>
-  <button data-tab="dispatches">🔥<br>出動記録</button>
-  <button data-tab="ledger">💴<br>収支簿</button>
-  <button data-tab="members">👥<br>団員</button>
+  <button data-tab="notices"><span class="ic">📢</span>お知らせ</button>
+  <button data-tab="events"><span class="ic">📅</span>イベント</button>
+  <button data-tab="dispatches"><span class="ic">🔥</span>出動記録</button>
+  <button data-tab="ledger"><span class="ic">💴</span>収支簿</button>
+  <button data-tab="members"><span class="ic">👥</span>団員</button>
 </nav>
 <div id="toast" hidden></div>
 <script>

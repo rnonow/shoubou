@@ -245,7 +245,7 @@ function renderEvents() {
         ${[["yes", "参加"], ["maybe", "未定"], ["no", "不参加"]].map(([s, l]) => `<button class="${s} ${mine?.status === s ? "on" : ""}" data-s="${s}">${l}</button>`).join("")}
       </div>
       <input id="cm${e.id}" placeholder="ひとこと（任意：遅れます 等）" data-cm="${e.id}" value="${esc(mine?.comment)}">`}
-      <div style="margin-top:8px;font-size:13px">
+      <div style="margin-top:8px;font-size:15px">
         <div>参加 <b>${by.yes.length}</b>　未定 <b>${by.maybe.length}</b>　不参加 <b>${by.no.length}</b>　未回答 <b>${none.length}</b></div>
         <div>${tags(by.yes, "yes")}${tags(by.maybe, "maybe")}${tags(by.no, "no")}${none.map((m) => `<span class="tag none">${label(m)}</span>`).join("")}</div>
       </div>

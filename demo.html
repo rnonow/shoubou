@@ -57,7 +57,27 @@ header #sync{font-weight:normal;font-size:12px;opacity:.85;margin-left:8px}
 .neg{color:#c62828}
 .inc{color:#1b5e20}
 .exp{color:#b71c1c}
-nav button{font-size:11px}
+/* ---- 文字を一回り大きく・下のアイコンを約2倍に ---- */
+body{font-size:17px;padding-bottom:calc(92px + env(safe-area-inset-bottom))}
+header{font-size:18px}
+header #who{font-size:14px}
+#demo{font-size:13px}
+h2{font-size:19px}
+h3{font-size:17px}
+label{font-size:15px}
+input,select,textarea{font-size:17px}
+.btn{font-size:16px}
+.btn.small{font-size:15px;padding:8px 12px}
+.muted{font-size:15px}
+.rsvp button{font-size:17px;padding:12px 0}
+.tag{font-size:14px;padding:3px 9px}
+.checks label{font-size:16px}
+table{font-size:16px}
+#toast{font-size:16px;bottom:110px}
+.role{font-size:12px}
+nav button{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0 8px;font-size:12px;min-width:0;white-space:nowrap}
+nav .ic{font-size:30px;line-height:1.1}
+@media (max-width:340px){nav .ic{font-size:26px}nav button{font-size:11px}}
 </style>
 <script>window.APP_CONFIG = { MODE: "demo", TEAM_NAME: "消防団" };</script>
 </head><body>
@@ -65,11 +85,11 @@ nav button{font-size:11px}
 <div id="demo" hidden>お試しモード：データはこの端末だけに保存されます</div>
 <main id="app"><p class="muted">読み込み中…</p></main>
 <nav id="nav" hidden>
-  <button data-tab="notices">📢<br>お知らせ</button>
-  <button data-tab="events">📅<br>イベント</button>
-  <button data-tab="dispatches">🔥<br>出動記録</button>
-  <button data-tab="ledger">💴<br>収支簿</button>
-  <button data-tab="members">👥<br>団員</button>
+  <button data-tab="notices"><span class="ic">📢</span>お知らせ</button>
+  <button data-tab="events"><span class="ic">📅</span>イベント</button>
+  <button data-tab="dispatches"><span class="ic">🔥</span>出動記録</button>
+  <button data-tab="ledger"><span class="ic">💴</span>収支簿</button>
+  <button data-tab="members"><span class="ic">👥</span>団員</button>
 </nav>
 <div id="toast" hidden></div>
 <script>
@@ -320,7 +340,7 @@ function renderEvents() {
         ${[["yes", "参加"], ["maybe", "未定"], ["no", "不参加"]].map(([s, l]) => `<button class="${s} ${mine?.status === s ? "on" : ""}" data-s="${s}">${l}</button>`).join("")}
       </div>
       <input id="cm${e.id}" placeholder="ひとこと（任意：遅れます 等）" data-cm="${e.id}" value="${esc(mine?.comment)}">`}
-      <div style="margin-top:8px;font-size:13px">
+      <div style="margin-top:8px;font-size:15px">
         <div>参加 <b>${by.yes.length}</b>　未定 <b>${by.maybe.length}</b>　不参加 <b>${by.no.length}</b>　未回答 <b>${none.length}</b></div>
         <div>${tags(by.yes, "yes")}${tags(by.maybe, "maybe")}${tags(by.no, "no")}${none.map((m) => `<span class="tag none">${label(m)}</span>`).join("")}</div>
       </div>
