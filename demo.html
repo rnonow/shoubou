@@ -140,7 +140,7 @@ function call(action, body = {}) {
   return new Promise((ok, ng) => {
     google.script.run
       .withSuccessHandler(ok)
-      .withFailureHandler((e) => ng(new Error(String(e && e.message || e).replace(/^Error:\s*/, ""))))
+      .withFailureHandler((e) => ng(new Error(String(e && e.message || e).replace(/^Error:\s{0,9}/, ""))))
       .api(action, body, token);
   });
 }
@@ -174,7 +174,7 @@ function showError(msg) {
     <p><button class="btn" id="retry">もう一度読み込む</button></p></div>`;
   $("#retry").onclick = () => { $("#app").innerHTML = '<p class="muted">読み込み中…</p>'; sync(); };
 }
-/** 画面を先に書き換え（optimistic）、裏でサーバーに送る。失敗したら最新データに戻す */
+
 async function mutate(action, body, optimistic) {
   if (optimistic && state.data) {
     const draft = JSON.parse(JSON.stringify(state.data));
@@ -263,14 +263,14 @@ function seed() {
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), 2500); }
 const fmtDate = (iso) => new Date(iso).toLocaleString("ja-JP", { month: "numeric", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit" });
 const hm = (iso) => new Date(iso).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
-/** イベントの日時表示：12/7(月) 19:00〜22:00（日をまたぐと「翌」） */
+
 function fmtRange(s, e) {
   if (!e) return fmtDate(s);
   const sd = new Date(s), ed = new Date(e);
   const days = Math.round((new Date(ed.toDateString()) - new Date(sd.toDateString())) / 864e5);
   return fmtDate(s) + "〜" + (days === 0 ? "" : days === 1 ? "翌" : fmtDate(e).replace(/\s.*$/, " ")) + hm(e);
 }
-/** 出動の時間表示：19:05〜21:30 */
+
 function fmtTimes(d) {
   if (!d.start_time && !d.end_time) return "";
   const next = d.start_time && d.end_time && d.end_time < d.start_time ? "翌" : "";
@@ -280,7 +280,7 @@ const me = () => state.data.me;
 const nameOf = (id) => state.data.members.find((m) => m.id === id)?.name ?? "（退団）";
 const ROLES = ["部長", "副部長", "会計"];
 const roleTag = (m) => (m && m.role ? ` <span class="role">${esc(m.role)}</span>` : "");
-/** 名前＋役職（HTML） */
+
 const label = (idOrMember) => { const m = typeof idOrMember === "string" ? state.data.members.find((x) => x.id === idOrMember) : idOrMember; return m ? esc(m.name) + roleTag(m) : "（退団）"; };
 const roleOrder = (m) => { const i = ROLES.indexOf(m.role); return i < 0 ? 99 : i; };
 const canEdit = (createdBy) => createdBy === me().id || me().is_admin;
@@ -495,7 +495,7 @@ function renderDispatches() {
 
 // ---------- お知らせ ----------
 const imgCache = {}; // file_id -> dataURL（この画面を開いている間だけ）
-/** 写真を縮小してJPEGにする（通信量とドライブ容量を抑える） */
+
 function shrinkImage(file, max = 1600, quality = 0.8) {
   return new Promise((ok, ng) => {
     const url = URL.createObjectURL(file); const img = new Image();
@@ -511,7 +511,7 @@ function shrinkImage(file, max = 1600, quality = 0.8) {
 }
 const fullCache = {};
 const inflight = {};
-/** 時間切れつきでサーバーを呼ぶ（返事がないまま待ち続けない） */
+
 function callWithTimeout(action, body, ms) {
   return Promise.race([call(action, body), new Promise((_, ng) => setTimeout(() => ng(new Error("時間切れ")), ms))]);
 }
@@ -559,7 +559,7 @@ function renderNotices() {
       <label>タイトル</label><input id="nt" placeholder="例：12月 部長会のお知らせ">
       <label>本文</label><textarea id="nb" placeholder="内容（任意）"></textarea>
       <label>資料の写真（${6}枚まで）</label>
-      <input type="file" id="nf" accept="image/*" multiple data-keep="no">
+      <input type="file" id="nf" accept="image/&#42;" multiple data-keep="no">
       <div class="thumbs" id="npv">${pendingImages.map((d, i) => `<span class="thumb"><img src="${d}"><button data-rmimg="${i}">×</button></span>`).join("")}</div>
       <p><button class="btn" id="nbtn">投稿する</button></p></details>
     <h2>お知らせ</h2>
@@ -634,7 +634,7 @@ function renderLedger() {
 
     <details class="card" id="sendr"><summary>📷 レシートを送る（だれでも）</summary>
       <p class="muted">立て替えたときなどに、レシートの写真を会計の人に送れます。</p>
-      <input type="file" id="rf" accept="image/*" multiple data-keep="no">
+      <input type="file" id="rf" accept="image/&#42;" multiple data-keep="no">
       <div class="thumbs">${receiptDraft.map((d, i) => `<span class="thumb"><img src="${d}"><button data-rmr="${i}">×</button></span>`).join("")}</div>
       <label>金額（わかれば）</label><input id="ra" inputmode="numeric" placeholder="例：1280">
       <label>メモ</label><input id="rm" placeholder="例：夜警の差し入れ（立替：自分）">
@@ -656,7 +656,7 @@ function renderLedger() {
       <label>レシート</label>
       <div class="thumbs">${(ed?.receipt_ids || []).map((id) => { const r = rcpById(id); return r ? `<span class="thumb" data-fid="${esc(r.file_id)}"><i>読み込み中…</i><img hidden><button data-unlink="${id}">×</button></span>` : ""; }).join("")}
         ${entryDraft.map((d, i) => `<span class="thumb"><img src="${d}"><button data-rme="${i}">×</button></span>`).join("")}</div>
-      <input type="file" id="lf" accept="image/*" multiple data-keep="no">
+      <input type="file" id="lf" accept="image/&#42;" multiple data-keep="no">
       <p class="row"><button class="btn" id="lbtn">${ed && ed.id ? "更新する" : "記録する"}</button>${ed ? `<button class="btn sub" id="lcancel">やめる</button>` : ""}</p></details>` : ""}
 
     <div class="spread"><h2>収支（${state.fy}年度）</h2><select id="fy" data-keep="no" style="width:auto">${fys.map((y) => `<option value="${y}" ${y === state.fy ? "selected" : ""}>${y}年度</option>`).join("")}</select></div>
