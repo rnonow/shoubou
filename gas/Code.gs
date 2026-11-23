@@ -11,8 +11,10 @@ var SHEETS = {
   events:    ['id', 'title', 'starts_at', 'place', 'note', 'created_by', 'created_at', 'ends_at'],
   rsvps:     ['event_id', 'member_id', 'status', 'comment', 'updated_at'],
   notices:   ['id', 'title', 'body', 'image_ids', 'created_by', 'created_at'],
+  ledger:    ['id', 'date', 'type', 'amount', 'category', 'memo', 'receipt_ids', 'created_by', 'created_at', 'updated_at'],
+  receipts:  ['id', 'file_id', 'amount', 'memo', 'sent_by', 'sent_at', 'status', 'entry_id'],
 };
-var SHEET_NAMES = { members: '団員', dispatches: '出動記録', events: 'イベント', rsvps: '出欠', notices: 'お知らせ' };
+var SHEET_NAMES = { members: '団員', dispatches: '出動記録', events: 'イベント', rsvps: '出欠', notices: 'お知らせ', ledger: '収支簿', receipts: 'レシート' };
 var SETTINGS = '設定';
 var ROLES = ['部長', '副部長', '会計']; // 各1人まで
 
@@ -111,14 +113,19 @@ var MAX_DEVICES = 5;
 // ---------- 画面から呼ばれる入口 ----------
 // 画面は action='sync' で全データを1回で受け取り、変更系の操作も最新の全データを返す。
 // 読み取りはキャッシュ（CacheService）から返すので、スプレッドシートを毎回読まない。
-var CACHE_KEY = 'snapshot_v3';
+var CACHE_KEY = 'snapshot_v4';
 
 function api(action, body, token) {
   body = body || {};
   if (action === 'sync') return sync_(token);
-  if (action === 'notices.image') return noticeImage_(token, body.notice_id, body.file_id);
+  if (action === 'notices.image' || action === 'image') return image_(token, body.file_id);
   // 時間のかかる処理（ドライブへの保存）はロックの外で先に行う
-  if (action === 'notices.add') { requireMember_(token); body.image_ids = saveImages_(body.images || []); delete body.images; }
+  if (action === 'notices.add') { requireMember_(token); body.image_ids = saveImages_(body.images || [], 'notice'); delete body.images; }
+  if (action === 'receipts.add' || action === 'ledger.add' || action === 'ledger.update') {
+    var who = requireMember_(token);
+    if (action !== 'receipts.add' && !canAccount_(who, load_().members)) fail_('収支簿を編集できるのは会計の人だけです。');
+    body.file_ids = saveImages_(body.images || [], 'receipt'); delete body.images;
+  }
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   var result;
@@ -138,6 +145,7 @@ function load_() {
   if (hit) return JSON.parse(hit);
   var d = {
     members: rows_('members'), events: rows_('events'), rsvps: rows_('rsvps'), dispatches: rows_('dispatches'), notices: rows_('notices'),
+    ledger: rows_('ledger'), receipts: rows_('receipts'),
     join_code: setting_(1), team_name: setting_(2),
   };
   var json = JSON.stringify(d);
@@ -167,6 +175,14 @@ function sync_(token) {
       return { id: n.id, title: n.title, body: n.body, image_ids: n.image_ids ? n.image_ids.split(',') : [], created_by: n.created_by,
                created_at: n.created_at };
     }),
+    ledger: (d.ledger || []).map(function (x) {
+      return { id: x.id, date: x.date, type: x.type, amount: Number(x.amount) || 0, category: x.category, memo: x.memo,
+               receipt_ids: x.receipt_ids ? x.receipt_ids.split(',') : [], created_by: x.created_by, updated_at: x.updated_at || x.created_at };
+    }),
+    receipts: (d.receipts || []).map(function (r) {
+      return { id: r.id, file_id: r.file_id, amount: r.amount ? Number(r.amount) : null, memo: r.memo, sent_by: r.sent_by, sent_at: r.sent_at, status: r.status, entry_id: r.entry_id };
+    }),
+    can_account: canAccount_(me, d.members),
     team_name: d.team_name,
   };
   if (me.is_admin === 'true') out.join_code = d.join_code;
@@ -275,6 +291,65 @@ function mutate_(action, b, token) {
       if (nd.image_ids) nd.image_ids.split(',').forEach(function (fid) { try { DriveApp.getFileById(fid).setTrashed(true); } catch (e) {} });
       sheet_('notices').deleteRow(nd._row); return { ok: true };
 
+    // ---------- 収支簿 ----------
+    case 'receipts.add': // 団員なら誰でもレシートを送れる
+      if (!(b.file_ids || []).length) fail_('レシートの写真を選んでください。');
+      var rids = b.file_ids.map(function (fid) {
+        var rc = { id: newId_(), file_id: fid, amount: cleanAmount_(b.amount, true), memo: b.memo || '', sent_by: me.id, sent_at: now_(), status: 'pending', entry_id: '' };
+        append_('receipts', rc); return rc.id;
+      });
+      return { ids: rids };
+
+    case 'receipts.delete': // 送った本人（未処理のときだけ）か会計
+      var rd = rows_('receipts').filter(function (x) { return x.id === b.id; })[0];
+      if (!rd) return { ok: true };
+      var acct = canAccount_(me, members);
+      if (!acct && !(rd.sent_by === me.id && rd.status === 'pending')) fail_('消せるのは、送った本人（未処理のとき）か会計の人だけです。');
+      if (rd.status === 'linked') fail_('収支に登録済みのレシートです。先に収支の行から外してください。');
+      try { DriveApp.getFileById(rd.file_id).setTrashed(true); } catch (e) {}
+      sheet_('receipts').deleteRow(rd._row); return { ok: true };
+
+    case 'receipts.dismiss': // 会計：収支に登録しないで「処理済み」にする
+      requireAccount_(me, members);
+      var rs = rows_('receipts').filter(function (x) { return x.id === b.id; })[0];
+      if (!rs) fail_('レシートが見つかりません。');
+      rs.status = b.undo ? 'pending' : 'done'; update_('receipts', rs._row, rs); return { ok: true };
+
+    case 'ledger.add':
+    case 'ledger.update':
+      requireAccount_(me, members);
+      var entry = action === 'ledger.update' ? rows_('ledger').filter(function (x) { return x.id === b.id; })[0] : null;
+      if (action === 'ledger.update' && !entry) fail_('収支の行が見つかりません。');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(b.date || '')) fail_('日付を入れてください。');
+      if (['income', 'expense'].indexOf(b.type) < 0) fail_('収入か支出かを選んでください。');
+      var amount = cleanAmount_(b.amount, false);
+      var recs = rows_('receipts');
+      // この行に付けるレシート：選んだ既存レシート＋会計が直接付けた写真
+      var keep = (b.receipt_ids || []).filter(function (id) { return recs.some(function (r) { return r.id === id; }); });
+      (b.file_ids || []).forEach(function (fid) {
+        var rc = { id: newId_(), file_id: fid, amount: '', memo: '', sent_by: me.id, sent_at: now_(), status: 'linked', entry_id: '' };
+        append_('receipts', rc); recs.push(rc); keep.push(rc.id);
+      });
+      var e2 = entry || { id: newId_(), created_by: me.id, created_at: now_() };
+      var before = entry && entry.receipt_ids ? entry.receipt_ids.split(',') : [];
+      e2.date = b.date; e2.type = b.type; e2.amount = String(amount); e2.category = b.category || ''; e2.memo = b.memo || '';
+      e2.receipt_ids = keep.join(','); e2.updated_at = now_();
+      if (entry) update_('ledger', entry._row, e2); else append_('ledger', e2);
+      // レシートの状態をそろえる
+      rows_('receipts').forEach(function (r) {
+        var on = keep.indexOf(r.id) >= 0, was = before.indexOf(r.id) >= 0;
+        if (on && (r.status !== 'linked' || r.entry_id !== e2.id)) { r.status = 'linked'; r.entry_id = e2.id; update_('receipts', r._row, r); }
+        else if (!on && was) { r.status = 'pending'; r.entry_id = ''; update_('receipts', r._row, r); }
+      });
+      return { id: e2.id };
+
+    case 'ledger.delete': // レシートは消さずに「未処理」に戻す
+      requireAccount_(me, members);
+      var ld = rows_('ledger').filter(function (x) { return x.id === b.id; })[0];
+      if (!ld) return { ok: true };
+      rows_('receipts').forEach(function (r) { if (r.entry_id === ld.id) { r.status = 'pending'; r.entry_id = ''; update_('receipts', r._row, r); } });
+      sheet_('ledger').deleteRow(ld._row); return { ok: true };
+
     case 'events.add':
       if (!b.title || !b.starts_at) fail_('タイトルと日時は必須です。');
       var ev = { id: newId_(), title: b.title, starts_at: b.starts_at, ends_at: b.ends_at, place: b.place, note: b.note, created_by: me.id, created_at: now_() };
@@ -309,22 +384,26 @@ function requireMember_(token) {
   if (!me) fail_('登録が確認できません。もう一度参加コードを入力してください。');
   return me;
 }
-function imageFolder_() {
-  var props = PropertiesService.getScriptProperties();
-  var id = props.getProperty('IMAGE_FOLDER_ID');
+var FOLDERS = {
+  notice:  { name: IMAGE_FOLDER, prop: 'IMAGE_FOLDER_ID' },
+  receipt: { name: '消防団アプリ_レシート', prop: 'RECEIPT_FOLDER_ID' },
+};
+function imageFolder_(kind) {
+  var props = PropertiesService.getScriptProperties(), f0 = FOLDERS[kind];
+  var id = props.getProperty(f0.prop);
   if (id) { try { return DriveApp.getFolderById(id); } catch (e) {} }
-  var f = DriveApp.createFolder(IMAGE_FOLDER); // 共有設定はしない（団専用アカウントだけが見られる）
-  props.setProperty('IMAGE_FOLDER_ID', f.getId());
+  var f = DriveApp.createFolder(f0.name); // 共有設定はしない（団専用アカウントだけが見られる）
+  props.setProperty(f0.prop, f.getId());
   return f;
 }
-function saveImages_(images) {
+function saveImages_(images, kind) {
   if (images.length > MAX_IMAGES) fail_('写真は' + MAX_IMAGES + '枚までです。');
   if (!images.length) return [];
-  var folder = imageFolder_();
+  var folder = imageFolder_(kind);
   return images.map(function (img, i) {
     var m = String(img.data || '').match(/^data:(image\/[a-z+.-]+);base64,(.+)$/);
     if (!m) fail_('写真の形式が読めませんでした。');
-    var blob = Utilities.newBlob(Utilities.base64Decode(m[2]), m[1], 'notice_' + now_().replace(/[:.]/g, '') + '_' + (i + 1) + '.jpg');
+    var blob = Utilities.newBlob(Utilities.base64Decode(m[2]), m[1], kind + '_' + now_().replace(/[:.]/g, '') + '_' + (i + 1) + '.jpg');
     return folder.createFile(blob).getId();
   });
 }
@@ -333,13 +412,31 @@ function findNotice_(id) {
   if (!n) fail_('お知らせが見つかりません。');
   return n;
 }
-/** 写真は団員だけに、お知らせに付いているものだけを返す（ドライブの他のファイルは読めない） */
-function noticeImage_(token, noticeId, fileId) {
+/** 写真は団員だけに、お知らせかレシートに付いているものだけを返す（ドライブの他のファイルは読めない） */
+function image_(token, fileId) {
   requireMember_(token);
-  var n = findNotice_(noticeId);
-  if (!n.image_ids || n.image_ids.split(',').indexOf(fileId) < 0) fail_('写真が見つかりません。');
+  var d = load_();
+  var ok = (d.notices || []).some(function (n) { return n.image_ids && n.image_ids.split(',').indexOf(fileId) >= 0; }) ||
+           (d.receipts || []).some(function (r) { return r.file_id === fileId; });
+  if (!fileId || !ok) fail_('写真が見つかりません。');
   var blob = DriveApp.getFileById(fileId).getBlob();
   return { data: 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes()) };
+}
+
+// ---------- 収支簿の権限 ----------
+/** 収支簿を編集できるのは役職「会計」の人。会計が空席のときだけ管理者が代わりに編集できる */
+function canAccount_(me, members) {
+  if (!me) return false;
+  if (me.role === '会計') return true;
+  var hasTreasurer = members.some(function (m) { return m.role === '会計'; });
+  return !hasTreasurer && me.is_admin === 'true';
+}
+function requireAccount_(me, members) { if (!canAccount_(me, members)) fail_('収支簿を編集できるのは会計の人だけです。'); }
+function cleanAmount_(v, optional) {
+  var s = String(v == null ? '' : v).normalize('NFKC').replace(/[,円¥\s]/g, '');
+  if (!s) { if (optional) return ''; fail_('金額を入れてください。'); }
+  if (!/^\d+$/.test(s) || Number(s) <= 0) fail_('金額は1以上の数字で入れてください。');
+  return String(Number(s));
 }
 
 /** 最初に1回だけ（または機能追加でGoogleに「承認が必要」と言われたときに）実行する */
