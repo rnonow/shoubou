@@ -53,6 +53,11 @@ header #sync{font-weight:normal;font-size:12px;opacity:.85;margin-left:8px}
 .overlay{position:fixed;inset:0;background:#000d;z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .overlay img{max-width:100%;max-height:90vh}
 .overlay p{color:#fff;font-size:13px}
+.big{font-size:30px;font-weight:bold;margin:2px 0}
+.neg{color:#c62828}
+.inc{color:#1b5e20}
+.exp{color:#b71c1c}
+nav button{font-size:11px}
 </style>
 <script>window.APP_CONFIG = { MODE: "gas", APP_URL: <?= appUrl ?>, FOCUS_EVENT: <?= focusEvent ?>, TOKEN: <?= token ?>, INITIAL: <?= initial ?>, TEAM_NAME: <?= teamName ?> };</script>
 </head><body>
@@ -63,6 +68,7 @@ header #sync{font-weight:normal;font-size:12px;opacity:.85;margin-left:8px}
   <button data-tab="notices">📢<br>お知らせ</button>
   <button data-tab="events">📅<br>イベント</button>
   <button data-tab="dispatches">🔥<br>出動記録</button>
+  <button data-tab="ledger">💴<br>収支簿</button>
   <button data-tab="members">👥<br>団員</button>
 </nav>
 <div id="toast" hidden></div>
@@ -134,7 +140,9 @@ function mock(action, b) {
   let me = db.members.find((m) => m.id === meId) || null;
   let result = { ok: true };
   const ev = (id) => db.events.find((e) => e.id === id);
-  if (action === "notices.image") return { data: (db.imgs || {})[b.file_id] };
+  if (action === "image") return { data: (db.imgs || {})[b.file_id] };
+  const saveImgs = (images) => (images || []).map((im) => { db.imgs = db.imgs || {}; const fid = "f" + (++db.seq); db.imgs[fid] = im.data; return fid; });
+  db.ledger = db.ledger || []; db.receipts = db.receipts || [];
   if (action !== "sync") {
     if (action === "join") {
       if (b.code !== db.code) throw new Error("参加コードが違います（お試しモードは " + db.code + "）");
@@ -151,6 +159,17 @@ function mock(action, b) {
         db.notices.push({ id: result.id, title: b.title, body: b.body, created_by: meId, created_at: new Date().toISOString(),
           image_ids: (b.images || []).map((im, i) => { const fid = "f" + result.id + "_" + i; db.imgs[fid] = im.data; return fid; }) }); break;
       case "notices.delete": db.notices = db.notices.filter((n) => n.id !== b.id); break;
+      case "receipts.add": saveImgs(b.images).forEach((fid) => db.receipts.push({ id: String(++db.seq), file_id: fid, amount: b.amount ? Number(b.amount) : null, memo: b.memo, sent_by: meId, sent_at: new Date().toISOString(), status: "pending", entry_id: "" })); break;
+      case "receipts.delete": db.receipts = db.receipts.filter((r) => r.id !== b.id); break;
+      case "receipts.dismiss": db.receipts.find((r) => r.id === b.id).status = "done"; break;
+      case "ledger.add": case "ledger.update": {
+        const ids = (b.receipt_ids || []).slice();
+        saveImgs(b.images).forEach((fid) => { const id = String(++db.seq); db.receipts.push({ id, file_id: fid, sent_by: meId, sent_at: new Date().toISOString(), status: "linked" }); ids.push(id); });
+        const row = { id: b.id || String(++db.seq), date: b.date, type: b.type, amount: Number(b.amount), category: b.category, memo: b.memo, receipt_ids: ids, updated_at: new Date().toISOString() };
+        db.ledger = db.ledger.filter((x) => x.id !== row.id).concat(row);
+        db.receipts.forEach((r) => { if (ids.includes(r.id)) { r.status = "linked"; r.entry_id = row.id; } else if (r.entry_id === row.id) { r.status = "pending"; r.entry_id = ""; } });
+        result = { id: row.id }; break; }
+      case "ledger.delete": db.ledger = db.ledger.filter((x) => x.id !== b.id); db.receipts.forEach((r) => { if (r.entry_id === b.id) { r.status = "pending"; r.entry_id = ""; } }); break;
       case "members.logoutAll": result = { ok: true, count: db.members.length - 1 }; break;
       case "members.remove": db.members = db.members.filter((m) => m.id !== b.id); break;
       case "dispatches.add": result = { id: String(++db.seq) };
@@ -166,7 +185,7 @@ function mock(action, b) {
     localStorage.demoDB = JSON.stringify(db);
   }
   if (!me) return { me: null };
-  return JSON.parse(JSON.stringify({ me, members: db.members, events: db.events, dispatches: db.dispatches, notices: db.notices || [], join_code: db.code, result }));
+  return JSON.parse(JSON.stringify({ me, members: db.members, events: db.events, dispatches: db.dispatches, notices: db.notices || [], ledger: db.ledger, receipts: db.receipts, can_account: true, join_code: db.code, result }));
 }
 function seed() {
   const names = ["佐藤", "鈴木", "高橋", "田中", "伊藤", "渡辺", "山本"];
@@ -271,7 +290,7 @@ function render() {
   const keep = {}; document.querySelectorAll("#app input, #app textarea, #app select").forEach((i) => { if (i.id) keep[i.id] = i.type === "checkbox" ? i.checked : i.value; });
   const open = [...document.querySelectorAll("#app details[open]")].map((d) => d.id);
   const focused = document.activeElement && document.activeElement.id;
-  ({ notices: renderNotices, events: renderEvents, dispatches: renderDispatches, members: renderMembers })[state.tab]();
+  ({ notices: renderNotices, events: renderEvents, dispatches: renderDispatches, ledger: renderLedger, members: renderMembers })[state.tab]();
   Object.entries(keep).forEach(([id, v]) => { const i = document.getElementById(id); if (i && i.dataset.keep !== "no") { if (i.type === "checkbox") i.checked = v; else i.value = v; } });
   open.forEach((id) => { const d = id && document.getElementById(id); if (d) d.open = true; });
   if (focused) document.getElementById(focused)?.focus();
@@ -436,7 +455,7 @@ function loadImages() {
     if (imgCache[fid]) { el.src = imgCache[fid]; return; }
     if (el.dataset.loading) return; el.dataset.loading = "1";
     try {
-      const r = await call("notices.image", { notice_id: el.dataset.nid, file_id: fid });
+      const r = await call("image", { file_id: fid });
       imgCache[fid] = r.data;
       document.querySelectorAll(`img[data-fid="${fid}"]`).forEach((x) => (x.src = r.data));
     } catch (e) { el.alt = "読み込めませんでした"; }
@@ -492,6 +511,140 @@ function renderNotices() {
     mutate("notices.delete", { id }, (d) => (d.notices = d.notices.filter((x) => x.id !== id))).catch(ignore);
   }));
   document.querySelectorAll("img[data-fid], .thumb img").forEach((im) => (im.onclick = () => im.src && showImage(im.src)));
+  loadImages();
+}
+
+// ---------- 収支簿 ----------
+const yen = (n) => "¥" + Number(n || 0).toLocaleString("ja-JP");
+const fyOf = (date) => { const y = Number(date.slice(0, 4)), m = Number(date.slice(5, 7)); return m >= 4 ? y : y - 1; }; // 年度は4月はじまり
+const CATEGORIES = ["会費", "補助金", "寄付", "飲食", "消耗品", "備品", "燃料・交通費", "慶弔", "その他"];
+let receiptDraft = [];   // 団員がこれから送るレシート写真
+let entryDraft = [];     // 会計が収支の行に直接付ける写真
+let editing = null;      // 修正中の行 { id?, receipt_ids: [] }
+function renderLedger() {
+  const D = state.data, acct = !!D.can_account || DEMO;
+  const ledger = (D.ledger || []).slice().sort((a, b) => (b.date + b.updated_at).localeCompare(a.date + a.updated_at));
+  const receipts = D.receipts || [];
+  const sum = (list, t) => list.filter((x) => x.type === t).reduce((s, x) => s + x.amount, 0);
+  const balance = sum(ledger, "income") - sum(ledger, "expense");
+  const nowFy = fyOf(new Date().toLocaleDateString("sv-SE"));
+  if (!state.fy) state.fy = nowFy;
+  const fys = [...new Set([nowFy, ...ledger.map((x) => fyOf(x.date))])].sort((a, b) => b - a);
+  const inFy = ledger.filter((x) => fyOf(x.date) === state.fy);
+  const carry = ledger.filter((x) => fyOf(x.date) < state.fy);
+  const carryBal = sum(carry, "income") - sum(carry, "expense");
+  const months = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3].map((m) => {
+    const ms = inFy.filter((x) => Number(x.date.slice(5, 7)) === m);
+    return { m, inc: sum(ms, "income"), exp: sum(ms, "expense") };
+  }).filter((r) => r.inc || r.exp);
+  const pending = receipts.filter((r) => r.status === "pending");
+  const mine = pending.filter((r) => r.sent_by === me().id);
+  const rcpById = (id) => receipts.find((r) => r.id === id);
+  const thumb = (fid, tmp) => `<span class="thumb"><img ${fid.startsWith("data:") ? `src="${fid}"` : `data-fid="${esc(fid)}"`} alt="読み込み中…"></span>`;
+  const treasurer = D.members.find((m) => m.role === "会計");
+  const ed = editing;
+  $("#app").innerHTML = `
+    <div class="card"><div class="muted">現在の残高</div><div class="big ${balance < 0 ? "neg" : ""}">${yen(balance)}</div>
+      <div class="muted">会計：${treasurer ? label(treasurer) : "（未設定。団員タブの「役職」で決めてください）"}</div></div>
+
+    <details class="card" id="sendr"><summary>📷 レシートを送る（だれでも）</summary>
+      <p class="muted">立て替えたときなどに、レシートの写真を会計の人に送れます。</p>
+      <input type="file" id="rf" accept="image/*" multiple data-keep="no">
+      <div class="thumbs">${receiptDraft.map((d, i) => `<span class="thumb"><img src="${d}"><button data-rmr="${i}">×</button></span>`).join("")}</div>
+      <label>金額（わかれば）</label><input id="ra" inputmode="numeric" placeholder="例：1280">
+      <label>メモ</label><input id="rm" placeholder="例：夜警の差し入れ（立替：自分）">
+      <p><button class="btn" id="rbtn">送る</button></p></details>
+
+    ${mine.length && !acct ? `<div class="card"><h3>送ったレシート（未処理）</h3>${mine.map((r) => `<div class="spread" style="margin:6px 0"><div class="row">${thumb(r.file_id)}<div>${r.amount ? yen(r.amount) : ""} ${esc(r.memo)}<div class="muted">${new Date(r.sent_at).toLocaleDateString("ja-JP")}</div></div></div><button class="btn sub small" data-delr="${r.id}">取り消す</button></div>`).join("")}</div>` : ""}
+
+    ${acct ? `<div class="card"><h3>未処理のレシート（${pending.length}）</h3>
+      ${pending.map((r) => `<div class="spread" style="margin:6px 0;align-items:flex-start"><div class="row" style="align-items:flex-start">${thumb(r.file_id)}<div>${r.amount ? `<b>${yen(r.amount)}</b> ` : ""}${esc(r.memo)}<div class="muted">${label(r.sent_by)}・${new Date(r.sent_at).toLocaleDateString("ja-JP")}</div></div></div>
+        <div style="display:flex;flex-direction:column;gap:4px"><button class="btn small" data-use="${r.id}">収支に登録</button><button class="btn sub small" data-dis="${r.id}">処理済み</button></div></div>`).join("") || '<p class="muted">ありません。</p>'}
+    </div>
+
+    <details class="card" id="newl" ${ed ? "open" : ""}><summary>${ed && ed.id ? "✏️ 収支を修正" : "＋ 収支を記録（会計）"}</summary>
+      <label>日付</label><input type="date" id="ld" data-keep="no" value="${esc(ed?.date || new Date().toLocaleDateString("sv-SE"))}">
+      <div class="rsvp" id="ltype">${[["income", "収入"], ["expense", "支出"]].map(([v, l]) => `<button class="${v === "income" ? "yes" : "no"} ${(ed?.type || "expense") === v ? "on" : ""}" data-t="${v}">${l}</button>`).join("")}</div>
+      <label>金額（円）</label><input id="la" data-keep="no" inputmode="numeric" value="${esc(ed?.amount || "")}">
+      <label>項目</label><input id="lc" data-keep="no" list="cats" value="${esc(ed?.category || "")}" placeholder="例：消耗品"><datalist id="cats">${CATEGORIES.map((c) => `<option value="${c}">`).join("")}</datalist>
+      <label>内容</label><input id="lm" data-keep="no" value="${esc(ed?.memo || "")}" placeholder="例：夜警用の電池">
+      <label>レシート</label>
+      <div class="thumbs">${(ed?.receipt_ids || []).map((id) => { const r = rcpById(id); return r ? `<span class="thumb"><img data-fid="${esc(r.file_id)}"><button data-unlink="${id}">×</button></span>` : ""; }).join("")}
+        ${entryDraft.map((d, i) => `<span class="thumb"><img src="${d}"><button data-rme="${i}">×</button></span>`).join("")}</div>
+      <input type="file" id="lf" accept="image/*" multiple data-keep="no">
+      <p class="row"><button class="btn" id="lbtn">${ed && ed.id ? "更新する" : "記録する"}</button>${ed ? `<button class="btn sub" id="lcancel">やめる</button>` : ""}</p></details>` : ""}
+
+    <div class="spread"><h2>収支（${state.fy}年度）</h2><select id="fy" data-keep="no" style="width:auto">${fys.map((y) => `<option value="${y}" ${y === state.fy ? "selected" : ""}>${y}年度</option>`).join("")}</select></div>
+    <div class="card"><table>
+      <tr><td>前年度からの繰越</td><td class="n">${yen(carryBal)}</td></tr>
+      <tr><td>収入</td><td class="n inc">+${yen(sum(inFy, "income"))}</td></tr>
+      <tr><td>支出</td><td class="n exp">−${yen(sum(inFy, "expense"))}</td></tr>
+      <tr><td><b>年度末（今）の残高</b></td><td class="n"><b>${yen(carryBal + sum(inFy, "income") - sum(inFy, "expense"))}</b></td></tr></table>
+      ${months.length ? `<details id="mon" style="margin-top:8px"><summary>月ごと</summary><table><tr><th>月</th><th class="n">収入</th><th class="n">支出</th></tr>
+        ${months.map((r) => `<tr><td>${r.m}月</td><td class="n inc">${r.inc ? yen(r.inc) : ""}</td><td class="n exp">${r.exp ? yen(r.exp) : ""}</td></tr>`).join("")}</table></details>` : ""}
+    </div>
+    ${inFy.map((x) => `<div class="card">
+      <div class="spread"><div><span class="muted">${esc(x.date)}</span>　${esc(x.category) || ""}</div><b class="${x.type === "income" ? "inc" : "exp"}">${x.type === "income" ? "+" : "−"}${yen(x.amount)}</b></div>
+      ${x.memo ? `<div style="margin-top:4px">${esc(x.memo)}</div>` : ""}
+      ${x.receipt_ids.length ? `<div class="thumbs">${x.receipt_ids.map((id) => { const r = rcpById(id); return r ? thumb(r.file_id) : ""; }).join("")}</div>` : ""}
+      ${acct && !x.id.startsWith("tmp") ? `<p class="row"><button class="btn sub small" data-edl="${x.id}">修正</button><button class="btn sub small" data-dell="${x.id}">削除</button></p>` : x.id.startsWith("tmp") ? '<p class="muted">保存中…</p>' : ""}
+    </div>`).join("") || '<p class="muted">この年度の記録はまだありません。</p>'}`;
+
+  // --- レシートを送る（だれでも）
+  $("#rf").onchange = async (e) => { for (const f of [...e.target.files].slice(0, 6 - receiptDraft.length)) { try { receiptDraft.push(await shrinkImage(f)); } catch (err) { toast(err.message); } } $("#sendr").open = true; render(); };
+  document.querySelectorAll("[data-rmr]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); receiptDraft.splice(Number(b.dataset.rmr), 1); render(); }));
+  $("#rbtn").onclick = () => {
+    if (!receiptDraft.length) return toast("レシートの写真を選んでください");
+    const body = { images: receiptDraft.map((d) => ({ data: d })), amount: $("#ra").value, memo: $("#rm").value };
+    receiptDraft = []; $("#ra").value = $("#rm").value = ""; $("#sendr").open = false;
+    mutate("receipts.add", body).then(() => toast("会計の人に送りました")).catch(ignore);
+    toast("送信中…");
+  };
+  document.querySelectorAll("[data-delr]").forEach((b) => (b.onclick = () => {
+    if (!confirm("このレシートを取り消しますか？")) return;
+    const id = b.dataset.delr; mutate("receipts.delete", { id }, (d) => (d.receipts = d.receipts.filter((r) => r.id !== id))).catch(ignore);
+  }));
+  $("#fy").onchange = (e) => { state.fy = Number(e.target.value); render(); };
+  if (acct) {
+    let type = ed?.type || "expense";
+    document.querySelectorAll("#ltype button").forEach((b) => (b.onclick = (e) => { e.preventDefault(); type = b.dataset.t; document.querySelectorAll("#ltype button").forEach((x) => x.classList.toggle("on", x === b)); }));
+    const keepForm = () => { editing = { ...(editing || {}), date: $("#ld").value, type, amount: $("#la").value, category: $("#lc").value, memo: $("#lm").value, receipt_ids: editing?.receipt_ids || [] }; };
+    $("#lf").onchange = async (e) => { keepForm(); for (const f of [...e.target.files].slice(0, 6)) { try { entryDraft.push(await shrinkImage(f)); } catch (err) { toast(err.message); } } render(); };
+    document.querySelectorAll("[data-rme]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); keepForm(); entryDraft.splice(Number(b.dataset.rme), 1); render(); }));
+    document.querySelectorAll("[data-unlink]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); keepForm(); editing.receipt_ids = editing.receipt_ids.filter((x) => x !== b.dataset.unlink); render(); }));
+    document.querySelectorAll("[data-use]").forEach((b) => (b.onclick = () => {
+      const r = rcpById(b.dataset.use);
+      editing = { date: new Date().toLocaleDateString("sv-SE"), type: "expense", amount: r.amount || "", category: "", memo: [r.memo, "（" + nameOf(r.sent_by) + "）"].filter(Boolean).join(" "), receipt_ids: [r.id] };
+      entryDraft = []; render(); $("#newl").scrollIntoView({ block: "start" }); $("#la").focus();
+    }));
+    document.querySelectorAll("[data-dis]").forEach((b) => (b.onclick = () => {
+      const id = b.dataset.dis; mutate("receipts.dismiss", { id }, (d) => (d.receipts.find((r) => r.id === id).status = "done")).catch(ignore);
+    }));
+    document.querySelectorAll("[data-edl]").forEach((b) => (b.onclick = () => {
+      const x = ledger.find((y) => y.id === b.dataset.edl); editing = { ...x, amount: String(x.amount), receipt_ids: x.receipt_ids.slice() }; entryDraft = []; render(); $("#newl").scrollIntoView({ block: "start" });
+    }));
+    document.querySelectorAll("[data-dell]").forEach((b) => (b.onclick = () => {
+      if (!confirm("この収支を削除しますか？（付いていたレシートは「未処理」に戻ります）")) return;
+      const id = b.dataset.dell;
+      mutate("ledger.delete", { id }, (d) => { d.ledger = d.ledger.filter((x) => x.id !== id); d.receipts.forEach((r) => { if (r.entry_id === id) { r.status = "pending"; r.entry_id = ""; } }); }).catch(ignore);
+    }));
+    if ($("#lcancel")) $("#lcancel").onclick = () => { editing = null; entryDraft = []; $("#newl").open = false; render(); };
+    $("#lbtn").onclick = () => {
+      const amount = $("#la").value.normalize("NFKC").replace(/[,円¥\s]/g, "");
+      if (!/^\d+$/.test(amount) || Number(amount) <= 0) return toast("金額を数字で入れてください");
+      const body = { id: editing?.id, date: $("#ld").value, type, amount, category: $("#lc").value, memo: $("#lm").value, receipt_ids: editing?.receipt_ids || [], images: entryDraft.map((d) => ({ data: d })) };
+      const isUpdate = !!editing?.id, previews = entryDraft.slice();
+      editing = null; entryDraft = []; $("#newl").open = false;
+      state.fy = fyOf(body.date);
+      mutate(isUpdate ? "ledger.update" : "ledger.add", body, (d) => {
+        d.ledger = d.ledger || [];
+        const row = { id: isUpdate ? body.id : tmpId(), date: body.date, type, amount: Number(amount), category: body.category, memo: body.memo, receipt_ids: body.receipt_ids, updated_at: new Date().toISOString() };
+        if (isUpdate) d.ledger = d.ledger.map((x) => (x.id === body.id ? { ...x, ...row } : x)); else d.ledger.push(row);
+        d.receipts.forEach((r) => { if (body.receipt_ids.includes(r.id)) r.status = "linked"; });
+      }).then(() => toast(isUpdate ? "更新しました" : "記録しました")).catch(ignore);
+    };
+  }
+  document.querySelectorAll(".thumb img").forEach((im) => (im.onclick = () => im.src && showImage(im.src)));
   loadImages();
 }
 

@@ -19,6 +19,7 @@ def page(cfg, title):
   <button data-tab="notices">📢<br>お知らせ</button>
   <button data-tab="events">📅<br>イベント</button>
   <button data-tab="dispatches">🔥<br>出動記録</button>
+  <button data-tab="ledger">💴<br>収支簿</button>
   <button data-tab="members">👥<br>団員</button>
 </nav>
 <div id="toast" hidden></div>
