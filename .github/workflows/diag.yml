@@ -1,0 +1,13 @@
+name: 調査（公開中のアプリを開いてみる）
+on: workflow_dispatch
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm i playwright@1.49.1 && npx playwright install --with-deps webkit chromium
+      - run: node .github/diag/check.js
+        env:
+          APP_URL: https://script.google.com/macros/s/${{ secrets.DEPLOYMENT_ID }}/exec
