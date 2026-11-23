@@ -48,7 +48,9 @@ function doGet(e) {
   // 登録はURLの k=… に持たせる（iPhoneなどではアプリを閉じると端末内の保存が消えることがあるため）
   t.token = p.k || '';
   // 最初の画面に必要なデータを一緒に埋め込み、開いてすぐ表示できるようにする
-  var first = t.token ? sync_(t.token) : null;
+  var first = null;
+  t.bootError = '';
+  try { first = t.token ? sync_(t.token) : null; } catch (err) { t.bootError = String(err && err.message || err); Logger.log(err && err.stack || err); }
   t.initial = first && first.me ? JSON.stringify(first) : '';
   t.appUrl = ScriptApp.getService().getUrl();
   t.teamName = setting_(2) || '消防団';
@@ -63,7 +65,9 @@ function sheet_(key) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ss.getSheetByName(SHEET_NAMES[key]);
   if (!sh) { // 新しく増えたシートは自動で作る（setup の再実行は不要）
-    sh = ss.insertSheet(SHEET_NAMES[key]);
+    // 同時に開いた人が先に作っていた場合は、そのシートを使う
+    try { sh = ss.insertSheet(SHEET_NAMES[key]); }
+    catch (e) { sh = ss.getSheetByName(SHEET_NAMES[key]); if (!sh) throw e; return sh; }
     sh.getRange(1, 1, 1, SHEETS[key].length).setValues([SHEETS[key]]).setFontWeight('bold');
     sh.getRange('A:Z').setNumberFormat('@');
     sh.setFrozenRows(1);
