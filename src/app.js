@@ -111,7 +111,6 @@ function mock(action, b) {
         db.receipts.forEach((r) => { if (ids.includes(r.id)) { r.status = "linked"; r.entry_id = row.id; } else if (r.entry_id === row.id) { r.status = "pending"; r.entry_id = ""; } });
         result = { id: row.id }; break; }
       case "ledger.delete": db.ledger = db.ledger.filter((x) => x.id !== b.id); db.receipts.forEach((r) => { if (r.entry_id === b.id) { r.status = "pending"; r.entry_id = ""; } }); break;
-      case "members.logoutAll": result = { ok: true, count: db.members.length - 1 }; break;
       case "members.remove": db.members = db.members.filter((m) => m.id !== b.id); break;
       case "dispatches.add": {
         const linked = b.event_id && db.dispatches.find((x) => x.event_id === b.event_id);
@@ -732,11 +731,7 @@ function renderMembers() {
       管理者を増やしたいだけなら、上の一覧の「管理者にする」を使ってください。<br>
       団専用Googleアカウントの引き継ぎは、手順書（SETUP.md）のチェックリストも一緒に行ってください。</p>
       <div class="row"><select id="tsel" style="flex:1"><option value="">次の管理者を選ぶ</option>${ms.filter((m) => m.id !== me().id).map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join("")}</select>
-      <button class="btn small" id="tbtn">引き継ぐ</button></div></div>
-    <div class="card"><h3>全員をログアウト（管理者だけに表示）</h3>
-      <p class="muted">あなた以外の全員が、次に開いたときに参加コードの入力からやり直しになります。同じ名前で入り直せば、記録や出欠はそのまま残ります。<br>
-      知らない人に入られたかもしれないときは、先に参加コードを変えてから使ってください。</p>
-      <button class="btn sub" id="lo">全員をログアウトする</button></div>` : ""}`;
+      <button class="btn small" id="tbtn">引き継ぐ</button></div></div>` : ""}`;
   if (!DEMO) $("#savebtn").onclick = () => showSaveTip(false);
   $("#mb").onclick = () => {
     const name = $("#mn").value.trim(); if (!name) return;
@@ -762,10 +757,6 @@ function renderMembers() {
     if (!confirm(`${nameOf(id)} さんに管理者を引き継ぎます。\nあなたは一般の団員になり、管理者の画面は見えなくなります。よろしいですか？`)) return;
     mutate("members.transferAdmin", { id }, (d) => { d.members.forEach((m) => { if (m.id === id) m.is_admin = true; if (m.id === d.me.id) m.is_admin = false; }); d.me.is_admin = false; })
       .then(() => toast(`${nameOf(id)} さんに引き継ぎました`)).catch(ignore);
-  };
-  if (me().is_admin) $("#lo").onclick = () => {
-    if (!confirm("あなた以外の全員をログアウトします。よろしいですか？")) return;
-    mutate("members.logoutAll", {}).then((r) => toast(`${r.count}人をログアウトしました`)).catch(ignore);
   };
   document.querySelectorAll("[data-adm]").forEach((b) => (b.onclick = () => {
     const id = b.dataset.adm, v = !!b.dataset.v;
