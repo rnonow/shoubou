@@ -230,10 +230,11 @@ function mock(action, b) {
       case "ledger.add": case "ledger.update": {
         const ids = (b.receipt_ids || []).slice();
         saveImgs(b.images).forEach((fid) => { const id = String(++db.seq); db.receipts.push({ id, file_id: fid, sent_by: meId, sent_at: new Date().toISOString(), status: "linked" }); ids.push(id); });
-        const row = { id: b.id || String(++db.seq), date: b.date, type: b.type, amount: Number(b.amount), category: b.category, memo: b.memo, receipt_ids: ids, updated_at: new Date().toISOString() };
+        const row = { id: b.id || String(++db.seq), date: b.date, type: b.type, account: b.account === "bank" ? "bank" : "cash", member_id: b.type === "income" ? b.member_id || "" : "", amount: Number(b.amount), category: b.category, memo: b.memo, receipt_ids: ids, updated_at: new Date().toISOString() };
         db.ledger = db.ledger.filter((x) => x.id !== row.id).concat(row);
         db.receipts.forEach((r) => { if (ids.includes(r.id)) { r.status = "linked"; r.entry_id = row.id; } else if (r.entry_id === row.id) { r.status = "pending"; r.entry_id = ""; } });
         result = { id: row.id }; break; }
+      case "dues.set": db.dues = (db.dues || []).filter((x) => x.fy !== Number(b.fy)).concat({ fy: Number(b.fy), amount: Number(b.amount) }); break;
       case "ledger.delete": db.ledger = db.ledger.filter((x) => x.id !== b.id); db.receipts.forEach((r) => { if (r.entry_id === b.id) { r.status = "pending"; r.entry_id = ""; } }); break;
       case "members.logoutAll": result = { ok: true, count: db.members.length - 1 }; break;
       case "members.remove": db.members = db.members.filter((m) => m.id !== b.id); break;
@@ -254,7 +255,7 @@ function mock(action, b) {
     localStorage.demoDB = JSON.stringify(db);
   }
   if (!me) return { me: null };
-  return JSON.parse(JSON.stringify({ me, members: db.members, events: db.events, dispatches: db.dispatches, notices: db.notices || [], ledger: db.ledger, receipts: db.receipts, can_account: true, join_code: db.code, result }));
+  return JSON.parse(JSON.stringify({ me, members: db.members, events: db.events, dispatches: db.dispatches, notices: db.notices || [], ledger: db.ledger, receipts: db.receipts, dues: db.dues || [], can_account: true, join_code: db.code, result }));
 }
 function seed() {
   const names = ["佐藤", "鈴木", "高橋", "田中", "伊藤", "渡辺", "山本"];
@@ -702,7 +703,36 @@ function renderNotices() {
 // ---------- 収支簿 ----------
 const yen = (n) => "¥" + Number(n || 0).toLocaleString("ja-JP");
 const fyOf = (date) => { const y = Number(date.slice(0, 4)), m = Number(date.slice(5, 7)); return m >= 4 ? y : y - 1; }; // 年度は4月はじまり
-const CATEGORIES = ["会費", "補助金", "寄付", "飲食", "消耗品", "備品", "燃料・交通費", "慶弔", "その他"];
+const CATEGORIES = ["活動費", "会費", "補助金", "寄付", "飲食", "消耗品", "備品", "燃料・交通費", "慶弔", "その他"];
+const DUES = "活動費"; // 団員から集める活動費の項目名
+// お金の場所：cash＝現金（手元の財布）、bank＝銀行。移動（transfer）のときは「出したほう」を表す
+const ACCOUNTS = { cash: "現金（手元）", bank: "銀行" };
+const accOf = (x) => (x.account === "bank" ? "bank" : "cash");
+
+function moves(x) {
+  const a = accOf(x), o = a === "bank" ? "cash" : "bank", r = { cash: 0, bank: 0 };
+  if (x.type === "income") r[a] += x.amount;
+  else if (x.type === "expense") r[a] -= x.amount;
+  else if (x.type === "transfer") { r[a] -= x.amount; r[o] += x.amount; }
+  return r;
+}
+const balances = (list) => list.reduce((s, x) => { const m = moves(x); s.cash += m.cash; s.bank += m.bank; return s; }, { cash: 0, bank: 0 });
+const typeName = (x) => (x.type === "income" ? "収入" : x.type === "expense" ? "支出" : accOf(x) === "bank" ? "引き出し" : "預け入れ");
+const placeName = (x) => (x.type === "transfer" ? (accOf(x) === "bank" ? "銀行→現金" : "現金→銀行") : ACCOUNTS[accOf(x)]);
+const sumType = (list, t) => list.filter((x) => x.type === t).reduce((s, x) => s + x.amount, 0);
+const byDateAsc = (a, b) => (a.date + (a.updated_at || "")).localeCompare(b.date + (b.updated_at || ""));
+
+function duesStatus(fy) {
+  const D = state.data, per = ((D.dues || []).find((x) => x.fy === fy) || {}).amount || 0;
+  const paid = {};
+  (D.ledger || []).filter((x) => x.type === "income" && x.member_id && fyOf(x.date) === fy).forEach((x) => { (paid[x.member_id] = paid[x.member_id] || []).push(x); });
+  const ids = [...D.members.slice().sort((a, b) => roleOrder(a) - roleOrder(b)).map((m) => m.id), ...Object.keys(paid).filter((id) => !D.members.some((m) => m.id === id))];
+  const rows = ids.map((id) => {
+    const list = paid[id] || [], got = list.reduce((s, x) => s + x.amount, 0);
+    return { id, list, got, state: !got ? "none" : per && got < per ? "part" : "done" };
+  });
+  return { per, rows, got: rows.reduce((s, r) => s + r.got, 0), done: rows.filter((r) => r.state === "done").length, count: D.members.length };
+}
 let receiptDraft = [];   // 団員がこれから送るレシート写真
 let entryDraft = [];     // 会計が収支の行に直接付ける写真
 let editing = null;      // 修正中の行 { id?, receipt_ids: [] }
@@ -710,26 +740,31 @@ function renderLedger() {
   const D = state.data, acct = !!D.can_account || DEMO;
   const ledger = (D.ledger || []).slice().sort((a, b) => (b.date + b.updated_at).localeCompare(a.date + a.updated_at));
   const receipts = D.receipts || [];
-  const sum = (list, t) => list.filter((x) => x.type === t).reduce((s, x) => s + x.amount, 0);
-  const balance = sum(ledger, "income") - sum(ledger, "expense");
+  const bal = balances(ledger), balance = bal.cash + bal.bank;
   const nowFy = fyOf(new Date().toLocaleDateString("sv-SE"));
   if (!state.fy) state.fy = nowFy;
   const fys = [...new Set([nowFy, ...ledger.map((x) => fyOf(x.date))])].sort((a, b) => b - a);
   const inFy = ledger.filter((x) => fyOf(x.date) === state.fy);
-  const carry = ledger.filter((x) => fyOf(x.date) < state.fy);
-  const carryBal = sum(carry, "income") - sum(carry, "expense");
+  const cb = balances(ledger.filter((x) => fyOf(x.date) < state.fy));
+  const eb = balances(ledger.filter((x) => fyOf(x.date) <= state.fy));
   const months = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3].map((m) => {
     const ms = inFy.filter((x) => Number(x.date.slice(5, 7)) === m);
-    return { m, inc: sum(ms, "income"), exp: sum(ms, "expense") };
+    return { m, inc: sumType(ms, "income"), exp: sumType(ms, "expense") };
   }).filter((r) => r.inc || r.exp);
+  const ds = duesStatus(state.fy);
   const pending = receipts.filter((r) => r.status === "pending");
   const mine = pending.filter((r) => r.sent_by === me().id);
   const rcpById = (id) => receipts.find((r) => r.id === id);
   const thumb = (fid) => (fid.startsWith("data:") ? `<span class="thumb"><img src="${fid}"></span>` : photoBox(fid));
   const treasurer = D.members.find((m) => m.role === "会計");
   const ed = editing;
+  const edType = ed?.type || "expense", edAcc = ed?.account === "bank" ? "bank" : "cash";
+  const accButtons = (type, acc) => (type === "transfer" ? [["cash", "現金→銀行（預け入れ）"], ["bank", "銀行→現金（引き出し）"]] : [["cash", "💴 現金（手元）"], ["bank", "🏦 銀行"]])
+    .map(([v, l]) => `<button class="maybe ${acc === v ? "on" : ""}" data-a="${v}">${l}</button>`).join("");
+  const stateTag = { done: '<span class="tag yes">済</span>', part: '<span class="tag maybe">一部</span>', none: '<span class="tag none">未</span>' };
   $("#app").innerHTML = `
     <div class="card"><div class="muted">現在の残高</div><div class="big ${balance < 0 ? "neg" : ""}">${yen(balance)}</div>
+      <table style="margin:4px 0 6px"><tr><td>💴 現金（手元の財布）</td><td class="n ${bal.cash < 0 ? "exp" : ""}">${yen(bal.cash)}</td></tr><tr><td>🏦 銀行</td><td class="n ${bal.bank < 0 ? "exp" : ""}">${yen(bal.bank)}</td></tr></table>
       <div class="muted">会計：${treasurer ? label(treasurer) : "（未設定。団員タブの「役職」で決めてください）"}</div></div>
 
     <details class="card" id="sendr"><summary>📷 レシートを送る（だれでも）</summary>
@@ -749,7 +784,10 @@ function renderLedger() {
 
     <details class="card" id="newl" ${ed ? "open" : ""}><summary>${ed && ed.id ? "✏️ 収支を修正" : "＋ 収支を記録（会計）"}</summary>
       <label>日付</label><input type="date" id="ld" data-keep="no" value="${esc(ed?.date || new Date().toLocaleDateString("sv-SE"))}">
-      <div class="rsvp" id="ltype">${[["income", "収入"], ["expense", "支出"]].map(([v, l]) => `<button class="${v === "income" ? "yes" : "no"} ${(ed?.type || "expense") === v ? "on" : ""}" data-t="${v}">${l}</button>`).join("")}</div>
+      <div class="rsvp" id="ltype">${[["income", "収入", "yes"], ["expense", "支出", "no"], ["transfer", "移動", "maybe"]].map(([v, l, c]) => `<button class="${c} ${edType === v ? "on" : ""}" data-t="${v}">${l}</button>`).join("")}</div>
+      <label id="lacclabel">${edType === "transfer" ? "移動の向き（銀行への預け入れ・銀行からの引き出し）" : "お金の場所"}</label>
+      <div class="rsvp" id="lacc">${accButtons(edType, edAcc)}</div>
+      ${ed?.member_id ? `<p class="muted">${esc(nameOf(ed.member_id))}さんの${DUES}</p>` : ""}
       <label>金額（円）</label><input id="la" data-keep="no" inputmode="numeric" value="${esc(ed?.amount || "")}">
       <label>項目</label><input id="lc" data-keep="no" list="cats" value="${esc(ed?.category || "")}" placeholder="例：消耗品"><datalist id="cats">${CATEGORIES.map((c) => `<option value="${c}">`).join("")}</datalist>
       <label>内容</label><input id="lm" data-keep="no" value="${esc(ed?.memo || "")}" placeholder="例：夜警用の電池">
@@ -761,15 +799,33 @@ function renderLedger() {
 
     <div class="spread"><h2>収支（${state.fy}年度）</h2><select id="fy" data-keep="no" style="width:auto">${fys.map((y) => `<option value="${y}" ${y === state.fy ? "selected" : ""}>${y}年度</option>`).join("")}</select></div>
     <div class="card"><table>
-      <tr><td>前年度からの繰越</td><td class="n">${yen(carryBal)}</td></tr>
-      <tr><td>収入</td><td class="n inc">+${yen(sum(inFy, "income"))}</td></tr>
-      <tr><td>支出</td><td class="n exp">−${yen(sum(inFy, "expense"))}</td></tr>
-      <tr><td><b>年度末（今）の残高</b></td><td class="n"><b>${yen(carryBal + sum(inFy, "income") - sum(inFy, "expense"))}</b></td></tr></table>
+      <tr><td>前年度からの繰越</td><td class="n">${yen(cb.cash + cb.bank)}</td></tr>
+      <tr><td>収入</td><td class="n inc">+${yen(sumType(inFy, "income"))}</td></tr>
+      <tr><td>支出</td><td class="n exp">−${yen(sumType(inFy, "expense"))}</td></tr>
+      <tr><td><b>年度末（今）の残高</b></td><td class="n"><b>${yen(eb.cash + eb.bank)}</b></td></tr>
+      <tr><td class="muted">　うち 現金（手元）</td><td class="n muted">${yen(eb.cash)}</td></tr>
+      <tr><td class="muted">　うち 銀行</td><td class="n muted">${yen(eb.bank)}</td></tr></table>
       ${months.length ? `<details id="mon" style="margin-top:8px"><summary>月ごと</summary><table><tr><th>月</th><th class="n">収入</th><th class="n">支出</th></tr>
         ${months.map((r) => `<tr><td>${r.m}月</td><td class="n inc">${r.inc ? yen(r.inc) : ""}</td><td class="n exp">${r.exp ? yen(r.exp) : ""}</td></tr>`).join("")}</table></details>` : ""}
     </div>
+
+    <details class="card" id="dues"><summary>👥 ${DUES}の集金（${state.fy}年度）　${ds.per ? `${ds.done}/${ds.count}人 済` : "金額未設定"}</summary>
+      <p>1人あたり <b>${ds.per ? yen(ds.per) : "未設定"}</b>　集まった額 <b>${yen(ds.got)}</b>${ds.per ? `（予定 ${yen(ds.per * ds.count)}）` : ""}</p>
+      ${acct ? `<div class="row"><input id="duea" data-keep="no" inputmode="numeric" placeholder="1人あたりの金額（例：5000）" value="${ds.per || ""}" style="flex:1"><button class="btn sub small" id="dueset">${ds.per ? "変更" : "決める"}</button></div>
+        <p class="muted">「受け取った」を押すと、収入（項目：${DUES}・現金）として収支簿に記録されます。銀行振込のときは記録したあと「修正」で銀行にしてください。</p>` : ""}
+      <table>${ds.rows.map((r) => `<tr><td>${label(r.id)}</td><td>${stateTag[r.state]}</td><td class="n">${r.got ? yen(r.got) : ""}</td>
+        <td class="n">${acct && r.state !== "done" && D.members.some((m) => m.id === r.id) ? `<button class="btn small" data-due="${r.id}">受け取った</button>` : ""}${acct && r.list.length ? ` <button class="btn sub small" data-undue="${r.id}">取り消す</button>` : ""}</td></tr>`).join("")}</table>
+    </details>
+
+    <div class="card"><h3>📄 ${state.fy}年度のまとめを出力</h3>
+      <p class="muted">1年分（${state.fy}年4月〜${state.fy + 1}年3月）の収入・支出の一覧、合計、現金・銀行の残高、${DUES}の集金状況を1つのファイルにします。印刷や総会の資料に使えます。</p>
+      <label class="row" style="gap:6px"><input type="checkbox" id="rpph" checked style="width:auto;margin:0"> レシートの写真もPDFに入れる</label>
+      <p class="row"><button class="btn small" id="rppdf">PDFで保存</button><button class="btn sub small" id="rpcsv">Excel用（CSV）で保存</button></p>
+      <div id="rpout"></div></div>
+
     ${inFy.map((x) => `<div class="card">
-      <div class="spread"><div><span class="muted">${esc(x.date)}</span>　${esc(x.category) || ""}</div><b class="${x.type === "income" ? "inc" : "exp"}">${x.type === "income" ? "+" : "−"}${yen(x.amount)}</b></div>
+      <div class="spread"><div><span class="muted">${esc(x.date)}</span>　${esc(x.category) || ""} <span class="tag">${placeName(x)}</span></div><b class="${x.type === "income" ? "inc" : x.type === "expense" ? "exp" : ""}">${x.type === "income" ? "+" : x.type === "expense" ? "−" : "⇄ "}${yen(x.amount)}</b></div>
+      ${x.member_id ? `<div class="muted" style="margin-top:4px">${label(x.member_id)}さんの${DUES}</div>` : ""}
       ${x.memo ? `<div style="margin-top:4px">${esc(x.memo)}</div>` : ""}
       ${x.receipt_ids.length ? `<div class="thumbs">${x.receipt_ids.map((id) => { const r = rcpById(id); return r ? thumb(r.file_id) : ""; }).join("")}</div>` : ""}
       ${acct && !x.id.startsWith("tmp") ? `<p class="row"><button class="btn sub small" data-edl="${x.id}">修正</button><button class="btn sub small" data-dell="${x.id}">削除</button></p>` : x.id.startsWith("tmp") ? '<p class="muted">保存中…</p>' : ""}
@@ -790,16 +846,25 @@ function renderLedger() {
     const id = b.dataset.delr; mutate("receipts.delete", { id }, (d) => (d.receipts = d.receipts.filter((r) => r.id !== id))).catch(ignore);
   }));
   $("#fy").onchange = (e) => { state.fy = Number(e.target.value); render(); };
+  // --- 年間まとめ（だれでも）
+  $("#rppdf").onclick = () => exportLedgerPdf(state.fy, $("#rpph").checked);
+  $("#rpcsv").onclick = () => exportLedgerCsv(state.fy);
   if (acct) {
-    let type = ed?.type || "expense";
-    document.querySelectorAll("#ltype button").forEach((b) => (b.onclick = (e) => { e.preventDefault(); type = b.dataset.t; document.querySelectorAll("#ltype button").forEach((x) => x.classList.toggle("on", x === b)); }));
-    const keepForm = () => { editing = { ...(editing || {}), date: $("#ld").value, type, amount: $("#la").value, category: $("#lc").value, memo: $("#lm").value, receipt_ids: editing?.receipt_ids || [] }; };
+    let type = edType, acc = edAcc;
+    const bindAcc = () => document.querySelectorAll("#lacc button").forEach((b) => (b.onclick = (e) => { e.preventDefault(); acc = b.dataset.a; document.querySelectorAll("#lacc button").forEach((x) => x.classList.toggle("on", x === b)); }));
+    bindAcc();
+    document.querySelectorAll("#ltype button").forEach((b) => (b.onclick = (e) => {
+      e.preventDefault(); type = b.dataset.t; document.querySelectorAll("#ltype button").forEach((x) => x.classList.toggle("on", x === b));
+      $("#lacc").innerHTML = accButtons(type, acc); bindAcc();
+      $("#lacclabel").textContent = type === "transfer" ? "移動の向き（銀行への預け入れ・銀行からの引き出し）" : "お金の場所";
+    }));
+    const keepForm = () => { editing = { ...(editing || {}), date: $("#ld").value, type, account: acc, amount: $("#la").value, category: $("#lc").value, memo: $("#lm").value, receipt_ids: editing?.receipt_ids || [] }; };
     $("#lf").onchange = async (e) => { keepForm(); await addPhotos(entryDraft, [...e.target.files]); render(); };
     document.querySelectorAll("[data-rme]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); keepForm(); entryDraft.splice(Number(b.dataset.rme), 1); render(); }));
     document.querySelectorAll("[data-unlink]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); keepForm(); editing.receipt_ids = editing.receipt_ids.filter((x) => x !== b.dataset.unlink); render(); }));
     document.querySelectorAll("[data-use]").forEach((b) => (b.onclick = () => {
       const r = rcpById(b.dataset.use);
-      editing = { date: new Date().toLocaleDateString("sv-SE"), type: "expense", amount: r.amount || "", category: "", memo: [r.memo, "（" + nameOf(r.sent_by) + "）"].filter(Boolean).join(" "), receipt_ids: [r.id] };
+      editing = { date: new Date().toLocaleDateString("sv-SE"), type: "expense", account: "cash", amount: r.amount || "", category: "", memo: [r.memo, "（" + nameOf(r.sent_by) + "）"].filter(Boolean).join(" "), receipt_ids: [r.id] };
       entryDraft = []; render(); $("#newl").scrollIntoView({ block: "start" }); $("#la").focus();
     }));
     document.querySelectorAll("[data-dis]").forEach((b) => (b.onclick = () => {
@@ -808,29 +873,165 @@ function renderLedger() {
     document.querySelectorAll("[data-edl]").forEach((b) => (b.onclick = () => {
       const x = ledger.find((y) => y.id === b.dataset.edl); editing = { ...x, amount: String(x.amount), receipt_ids: x.receipt_ids.slice() }; entryDraft = []; render(); $("#newl").scrollIntoView({ block: "start" });
     }));
+    const delEntry = (id) => mutate("ledger.delete", { id }, (d) => { d.ledger = d.ledger.filter((x) => x.id !== id); d.receipts.forEach((r) => { if (r.entry_id === id) { r.status = "pending"; r.entry_id = ""; } }); }).catch(ignore);
     document.querySelectorAll("[data-dell]").forEach((b) => (b.onclick = () => {
       if (!confirm("この収支を削除しますか？（付いていたレシートは「未処理」に戻ります）")) return;
-      const id = b.dataset.dell;
-      mutate("ledger.delete", { id }, (d) => { d.ledger = d.ledger.filter((x) => x.id !== id); d.receipts.forEach((r) => { if (r.entry_id === id) { r.status = "pending"; r.entry_id = ""; } }); }).catch(ignore);
+      delEntry(b.dataset.dell);
     }));
     if ($("#lcancel")) $("#lcancel").onclick = () => { editing = null; entryDraft = []; $("#newl").open = false; render(); };
+    const saveEntry = (body, isUpdate) => {
+      state.fy = fyOf(body.date);
+      return mutate(isUpdate ? "ledger.update" : "ledger.add", body, (d) => {
+        d.ledger = d.ledger || [];
+        const row = { id: isUpdate ? body.id : tmpId(), date: body.date, type: body.type, account: body.account, member_id: body.member_id || "", amount: Number(body.amount), category: body.category, memo: body.memo, receipt_ids: body.receipt_ids, updated_at: new Date().toISOString() };
+        if (isUpdate) d.ledger = d.ledger.map((x) => (x.id === body.id ? { ...x, ...row } : x)); else d.ledger.push(row);
+        d.receipts.forEach((r) => { if (body.receipt_ids.includes(r.id)) r.status = "linked"; });
+      });
+    };
     $("#lbtn").onclick = () => {
       const amount = $("#la").value.normalize("NFKC").replace(/[,円¥\s]/g, "");
       if (!/^\d+$/.test(amount) || Number(amount) <= 0) return toast("金額を数字で入れてください");
-      const body = { id: editing?.id, date: $("#ld").value, type, amount, category: $("#lc").value, memo: $("#lm").value, receipt_ids: editing?.receipt_ids || [], images: entryDraft.map((d) => ({ data: d })) };
-      const isUpdate = !!editing?.id, previews = entryDraft.slice();
+      const body = { id: editing?.id, date: $("#ld").value, type, account: acc, member_id: type === "income" ? editing?.member_id || "" : "", amount, category: $("#lc").value, memo: $("#lm").value, receipt_ids: editing?.receipt_ids || [], images: entryDraft.map((d) => ({ data: d })) };
+      const isUpdate = !!editing?.id;
       editing = null; entryDraft = []; $("#newl").open = false;
-      state.fy = fyOf(body.date);
-      mutate(isUpdate ? "ledger.update" : "ledger.add", body, (d) => {
-        d.ledger = d.ledger || [];
-        const row = { id: isUpdate ? body.id : tmpId(), date: body.date, type, amount: Number(amount), category: body.category, memo: body.memo, receipt_ids: body.receipt_ids, updated_at: new Date().toISOString() };
-        if (isUpdate) d.ledger = d.ledger.map((x) => (x.id === body.id ? { ...x, ...row } : x)); else d.ledger.push(row);
-        d.receipts.forEach((r) => { if (body.receipt_ids.includes(r.id)) r.status = "linked"; });
-      }).then(() => toast(isUpdate ? "更新しました" : "記録しました")).catch(ignore);
+      saveEntry(body, isUpdate).then(() => toast(isUpdate ? "更新しました" : "記録しました")).catch(ignore);
     };
+    // --- 活動費の集金
+    $("#dueset").onclick = () => {
+      const amount = $("#duea").value.normalize("NFKC").replace(/[,円¥\s]/g, "");
+      if (!/^\d+$/.test(amount) || Number(amount) <= 0) return toast("金額を数字で入れてください");
+      const fy = state.fy;
+      mutate("dues.set", { fy, amount }, (d) => { d.dues = (d.dues || []).filter((x) => x.fy !== fy).concat({ fy, amount: Number(amount) }); }).then(() => toast(DUES + "を " + yen(amount) + " にしました")).catch(ignore);
+    };
+    document.querySelectorAll("[data-due]").forEach((b) => (b.onclick = () => {
+      const id = b.dataset.due, row = ds.rows.find((r) => r.id === id), rest = ds.per ? ds.per - row.got : 0;
+      const input = prompt(nameOf(id) + "さんから受け取った金額（円）", rest > 0 ? String(rest) : "");
+      if (input == null) return;
+      const amount = input.normalize("NFKC").replace(/[,円¥\s]/g, "");
+      if (!/^\d+$/.test(amount) || Number(amount) <= 0) return toast("金額を数字で入れてください");
+      const today = new Date().toLocaleDateString("sv-SE");
+      const date = fyOf(today) === state.fy ? today : state.fy + "-04-01"; // 選んでいる年度の中の日付にする
+      saveEntry({ date, type: "income", account: "cash", member_id: id, amount, category: DUES, memo: nameOf(id) + "さん", receipt_ids: [], images: [] }, false)
+        .then(() => toast(nameOf(id) + "さんの" + DUES + "を記録しました")).catch(ignore);
+      $("#dues").open = true;
+    }));
+    document.querySelectorAll("[data-undue]").forEach((b) => (b.onclick = () => {
+      const row = ds.rows.find((r) => r.id === b.dataset.undue);
+      if (!confirm(nameOf(row.id) + "さんの" + DUES + "の記録（" + row.list.length + "件・" + yen(row.got) + "）を収支簿から消しますか？")) return;
+      row.list.forEach((x) => delEntry(x.id));
+    }));
   }
   document.querySelectorAll(".thumb:not([data-fid]) img").forEach((im) => (im.onclick = () => im.src && showImage(im.src)));
   loadImages();
+}
+
+// ---------- 収支簿の年間まとめ（PDF・CSV） ----------
+
+function fyReport(fy) {
+  const all = (state.data.ledger || []).slice().sort(byDateAsc);
+  const inFy = all.filter((x) => fyOf(x.date) === fy);
+  const start = balances(all.filter((x) => fyOf(x.date) < fy));
+  const run = { ...start };
+  const rows = inFy.map((x, i) => { const m = moves(x); run.cash += m.cash; run.bank += m.bank; return { no: i + 1, x, cash: run.cash, bank: run.bank }; });
+  return { inFy, start, end: { ...run }, rows };
+}
+function ledgerReportHtml(fy, withPhotos, imgSrc) {
+  const D = state.data, R = fyReport(fy), ds = duesStatus(fy);
+  const team = D.team_name || CFG.TEAM_NAME || "消防団", treasurer = D.members.find((m) => m.role === "会計");
+  const inc = (list, a) => list.filter((x) => x.type === "income" && (!a || accOf(x) === a)).reduce((s, x) => s + x.amount, 0);
+  const exp = (list, a) => list.filter((x) => x.type === "expense" && (!a || accOf(x) === a)).reduce((s, x) => s + x.amount, 0);
+  const tr = (list, a) => list.filter((x) => x.type === "transfer").reduce((s, x) => s + moves(x)[a], 0);
+  const sign = (n) => (n > 0 ? "+" : n < 0 ? "−" : "") + yen(Math.abs(n));
+  const cats = (t) => { const m = {}; R.inFy.filter((x) => x.type === t).forEach((x) => (m[x.category || "（項目なし）"] = (m[x.category || "（項目なし）"] || 0) + x.amount)); return Object.entries(m).sort((a, b) => b[1] - a[1]); };
+  const months = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3].map((m) => { const ms = R.inFy.filter((x) => Number(x.date.slice(5, 7)) === m); return [m, inc(ms), exp(ms)]; });
+  const rcp = (id) => (D.receipts || []).find((r) => r.id === id);
+  const today = new Date().toLocaleDateString("ja-JP");
+  const catTable = (t, title) => { const c = cats(t); return `<h3>${title}</h3><table><tr><th>項目</th><th class="n">金額</th></tr>${c.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="n">${yen(v)}</td></tr>`).join("") || '<tr><td colspan="2">なし</td></tr>'}</table>`; };
+  const photos = withPhotos ? R.rows.filter((r) => r.x.receipt_ids.length) : [];
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><title>${esc(team)} 収支簿 ${fy}年度</title><style>
+body{font-family:"Noto Sans JP","Hiragino Sans","Yu Gothic",sans-serif;font-size:10pt;color:#000;margin:16px}
+h1{font-size:16pt;margin:0 0 4px}h2{font-size:12pt;margin:18px 0 6px;border-bottom:2px solid #c62828;padding-bottom:2px}h3{font-size:10.5pt;margin:10px 0 4px}
+table{border-collapse:collapse;width:100%;margin-bottom:6px}th,td{border:1px solid #888;padding:3px 5px;vertical-align:top}th{background:#eee;font-weight:bold}
+.n{text-align:right;white-space:nowrap}.muted{color:#555;font-size:9pt}.inc{color:#1b5e20}.exp{color:#b71c1c}.tot td{font-weight:bold;background:#f6f6f6}
+.half{width:48%;display:inline-block;vertical-align:top;margin-right:2%}.ph{page-break-inside:avoid;margin:8px 0}.ph img{width:210px;margin:2px 4px 2px 0;vertical-align:top;border:1px solid #ccc}
+.sign td{height:40px;width:25%}</style></head><body>
+<h1>${esc(team)}　収支簿　${fy}年度</h1>
+<div class="muted">期間：${fy}年4月1日〜${fy + 1}年3月31日　／　作成日：${today}　／　会計：${treasurer ? esc(treasurer.name) : "（未設定）"}</div>
+
+<h2>1. 収支のまとめ</h2>
+<table><tr><th></th><th class="n">現金（手元）</th><th class="n">銀行</th><th class="n">合計</th></tr>
+<tr><td>前年度からの繰越</td><td class="n">${yen(R.start.cash)}</td><td class="n">${yen(R.start.bank)}</td><td class="n">${yen(R.start.cash + R.start.bank)}</td></tr>
+<tr><td>収入</td><td class="n inc">${yen(inc(R.inFy, "cash"))}</td><td class="n inc">${yen(inc(R.inFy, "bank"))}</td><td class="n inc">${yen(inc(R.inFy))}</td></tr>
+<tr><td>支出</td><td class="n exp">${yen(exp(R.inFy, "cash"))}</td><td class="n exp">${yen(exp(R.inFy, "bank"))}</td><td class="n exp">${yen(exp(R.inFy))}</td></tr>
+<tr><td>預け入れ・引き出し（移動）</td><td class="n">${sign(tr(R.inFy, "cash"))}</td><td class="n">${sign(tr(R.inFy, "bank"))}</td><td class="n">—</td></tr>
+<tr class="tot"><td>年度末の残高（次年度へ繰越）</td><td class="n">${yen(R.end.cash)}</td><td class="n">${yen(R.end.bank)}</td><td class="n">${yen(R.end.cash + R.end.bank)}</td></tr></table>
+<div class="muted">「移動」は銀行への預け入れ・銀行からの引き出しで、収入・支出には含めません。</div>
+
+<div class="half">${catTable("income", "収入の内訳（項目別）")}</div><div class="half">${catTable("expense", "支出の内訳（項目別）")}</div>
+<h3>月ごと</h3>
+<table><tr><th>月</th>${months.map(([m]) => `<th class="n">${m}月</th>`).join("")}</tr>
+<tr><td>収入</td>${months.map(([, i]) => `<td class="n">${i ? i.toLocaleString("ja-JP") : ""}</td>`).join("")}</tr>
+<tr><td>支出</td>${months.map(([, , e]) => `<td class="n">${e ? e.toLocaleString("ja-JP") : ""}</td>`).join("")}</tr></table>
+
+<h2>2. ${DUES}の集金状況</h2>
+<div>1人あたり ${ds.per ? yen(ds.per) : "（未設定）"}　／　納入済み ${ds.done}人（団員${ds.count}人）　／　集まった額 ${yen(ds.got)}${ds.per ? `（予定 ${yen(ds.per * ds.count)}）` : ""}</div>
+<table><tr><th>団員</th><th>状況</th><th class="n">金額</th><th>受け取った日</th></tr>
+${ds.rows.map((r) => `<tr><td>${esc(nameOf(r.id))}</td><td>${{ done: "済", part: "一部", none: "未" }[r.state]}</td><td class="n">${r.got ? yen(r.got) : ""}</td><td>${r.list.map((x) => esc(x.date)).join("、")}</td></tr>`).join("")}</table>
+
+<h2>3. 明細（${R.rows.length}件）</h2>
+<table><tr><th>No</th><th>日付</th><th>区分</th><th>場所</th><th>項目・内容</th><th class="n">収入</th><th class="n">支出</th><th class="n">現金残高</th><th class="n">銀行残高</th><th>領収</th></tr>
+<tr><td></td><td></td><td colspan="5">前年度からの繰越</td><td class="n">${yen(R.start.cash)}</td><td class="n">${yen(R.start.bank)}</td><td></td></tr>
+${R.rows.map(({ no, x, cash, bank }) => `<tr><td class="n">${no}</td><td class="n">${esc(x.date.slice(5).replace("-", "/"))}</td><td style="white-space:nowrap">${typeName(x)}</td><td style="white-space:nowrap">${x.type === "transfer" ? placeName(x) : accOf(x) === "bank" ? "銀行" : "現金"}</td>
+<td>${esc(x.category)}${x.category && x.memo ? "：" : ""}${esc(x.memo)}${x.type === "transfer" ? `（${yen(x.amount)}）` : ""}</td>
+<td class="n inc">${x.type === "income" ? yen(x.amount) : ""}</td><td class="n exp">${x.type === "expense" ? yen(x.amount) : ""}</td>
+<td class="n">${yen(cash)}</td><td class="n">${yen(bank)}</td><td class="n">${x.receipt_ids.length ? x.receipt_ids.length + "枚" : ""}</td></tr>`).join("")}
+<tr class="tot"><td></td><td></td><td colspan="3">合計・年度末残高</td><td class="n">${yen(inc(R.inFy))}</td><td class="n">${yen(exp(R.inFy))}</td><td class="n">${yen(R.end.cash)}</td><td class="n">${yen(R.end.bank)}</td><td></td></tr></table>
+
+<h2>確認欄</h2>
+<table class="sign"><tr><th>会計</th><th>監査</th><th>監査</th><th>団長・部長</th></tr><tr><td></td><td></td><td></td><td></td></tr></table>
+${photos.length ? `<h2 style="page-break-before:always">4. レシート・領収書の写真</h2>
+${photos.map(({ no, x }) => `<div class="ph"><div><b>No.${no}</b>　${esc(x.date)}　${esc(x.category)} ${esc(x.memo)}　${x.type === "income" ? "+" : x.type === "expense" ? "−" : ""}${yen(x.amount)}</div>
+${x.receipt_ids.map((id) => { const r = rcp(id); const src = r && imgSrc(r.file_id); return src ? `<img src="${src}">` : ""; }).join("")}</div>`).join("")}` : ""}
+</body></html>`;
+}
+const reportName = (fy, ext) => `収支簿_${fy}年度_${new Date().toLocaleDateString("sv-SE")}.${ext}`;
+
+function offerFile(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = name; a.target = "_blank"; document.body.append(a); a.click(); a.remove();
+  const out = $("#rpout");
+  if (out) out.innerHTML = `<p class="muted">保存が始まらないときは <a href="${url}" download="${esc(name)}" target="_blank">ここをタップ</a>してください（${esc(name)}）。</p>`;
+}
+let exporting = false;
+async function exportLedgerPdf(fy, withPhotos) {
+  if (exporting) return;
+  if (DEMO) { // お試し版はサーバーが無いので、印刷画面から「PDFに保存」を選んでもらう
+    const html = ledgerReportHtml(fy, withPhotos, (fid) => (fid.startsWith("data:") ? fid : (mock("image", { file_id: fid }) || {}).data || ""));
+    const w = window.open("", "_blank"); if (!w) return toast("新しい画面を開けませんでした");
+    w.document.write(html); w.document.close(); setTimeout(() => w.print(), 600); return;
+  }
+  const html = ledgerReportHtml(fy, withPhotos, (fid) => "{{IMG:" + fid + "}}");
+  const btn = $("#rppdf"); exporting = true;
+  if (btn) { btn.disabled = true; btn.textContent = "作成中…"; }
+  toast("PDFを作っています（写真が多いと1分ほどかかります）");
+  try {
+    const r = await callWithTimeout("ledger.pdf", { html, name: reportName(fy, "pdf") }, 300000);
+    const bin = atob(r.data), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    offerFile(new Blob([bytes], { type: "application/pdf" }), r.name);
+    toast("PDFを作りました");
+  } catch (e) { toast("PDFを作れませんでした：" + e.message); }
+  finally { exporting = false; const b = $("#rppdf"); if (b) { b.disabled = false; b.textContent = "PDFで保存"; } }
+}
+function exportLedgerCsv(fy) {
+  const R = fyReport(fy), q = (v) => '"' + String(v ?? "").replace(/"/g, '""') + '"';
+  const lines = [["No", "日付", "区分", "お金の場所", "項目", "内容", "団員", "収入", "支出", "現金残高", "銀行残高", "合計残高", "レシート枚数"]];
+  lines.push(["", "", "繰越", "", "", "前年度からの繰越", "", "", "", R.start.cash, R.start.bank, R.start.cash + R.start.bank, ""]);
+  R.rows.forEach(({ no, x, cash, bank }) => lines.push([no, x.date, typeName(x), placeName(x), x.category, x.memo, x.member_id ? nameOf(x.member_id) : "",
+    x.type === "income" ? x.amount : "", x.type === "expense" ? x.amount : "", cash, bank, cash + bank, x.receipt_ids.length || ""]));
+  lines.push(["", "", "合計", "", "", "年度末の残高", "", sumType(R.inFy, "income"), sumType(R.inFy, "expense"), R.end.cash, R.end.bank, R.end.cash + R.end.bank, ""]);
+  const csv = "﻿" + lines.map((l) => l.map(q).join(",")).join("\r\n"); // 先頭の印（BOM）があるとExcelで文字化けしない
+  offerFile(new Blob([csv], { type: "text/csv" }), reportName(fy, "csv"));
 }
 
 // ---------- 団員 ----------
