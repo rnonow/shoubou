@@ -138,7 +138,7 @@ function api(action, body, token) {
   if (action === 'notices.add') { requireMember_(token); body.image_ids = saveImages_(body.images || [], 'notice'); delete body.images; }
   if (action === 'receipts.add' || action === 'ledger.add' || action === 'ledger.update') {
     var who = requireMember_(token);
-    if (action !== 'receipts.add' && !canAccount_(who, load_().members)) fail_('収支簿を編集できるのは会計の人だけです。');
+    if (action !== 'receipts.add' && !canAccount_(who, load_().members)) fail_('収支簿を編集できるのは会計の人と管理者だけです。');
     body.file_ids = saveImages_(body.images || [], 'receipt'); delete body.images;
   }
   var lock = LockService.getScriptLock();
@@ -347,7 +347,7 @@ function mutate_(action, b, token) {
       var rd = rows_('receipts').filter(function (x) { return x.id === b.id; })[0];
       if (!rd) return { ok: true };
       var acct = canAccount_(me, members);
-      if (!acct && !(rd.sent_by === me.id && rd.status === 'pending')) fail_('消せるのは、送った本人（未処理のとき）か会計の人だけです。');
+      if (!acct && !(rd.sent_by === me.id && rd.status === 'pending')) fail_('消せるのは、送った本人（未処理のとき）か会計の人・管理者だけです。');
       if (rd.status === 'linked') fail_('収支に登録済みのレシートです。先に収支の行から外してください。');
       try { DriveApp.getFileById(rd.file_id).setTrashed(true); } catch (e) {}
       sheet_('receipts').deleteRow(rd._row); return { ok: true };
@@ -484,13 +484,14 @@ function image_(token, fileId, thumb) {
 
 // ---------- 収支簿の年間まとめ（PDF） ----------
 /**
- * 画面で作った「年間まとめ」のHTMLをPDFにして返す（団員ならだれでも）。
+ * 画面で作った「年間まとめ」のHTMLをPDFにして返す（会計の人と管理者だけ）。
  * HTMLの中の {{IMG:写真ID}} は、レシートの写真に差し替える（レシート以外の写真・ファイルは入れない）。
  * 写真が多くて重いときは、途中から小さい画像（サムネイル）にして、PDFが大きくなりすぎないようにする。
  */
 var PDF_PHOTO_LIMIT = 10 * 1024 * 1024;
 function ledgerPdf_(token, b) {
-  requireMember_(token);
+  var who = requireMember_(token);
+  if (!canAccount_(who, load_().members)) fail_('まとめを出力できるのは会計の人と管理者だけです。');
   var html = String(b.html || '');
   if (!html || html.length > 3000000) fail_('まとめの内容が大きすぎます。');
   var allowed = {};
@@ -512,14 +513,11 @@ function ledgerPdf_(token, b) {
 }
 
 // ---------- 収支簿の権限 ----------
-/** 収支簿を編集できるのは役職「会計」の人。会計が空席のときだけ管理者が代わりに編集できる */
+/** 収支簿を操作できるのは役職「会計」の人と管理者（管理者はアプリのすべての機能を使える）。ほかの団員はレシートを送ることと見ることだけ */
 function canAccount_(me, members) {
-  if (!me) return false;
-  if (me.role === '会計') return true;
-  var hasTreasurer = members.some(function (m) { return m.role === '会計'; });
-  return !hasTreasurer && me.is_admin === 'true';
+  return !!me && (me.role === '会計' || me.is_admin === 'true');
 }
-function requireAccount_(me, members) { if (!canAccount_(me, members)) fail_('収支簿を編集できるのは会計の人だけです。'); }
+function requireAccount_(me, members) { if (!canAccount_(me, members)) fail_('収支簿を編集できるのは会計の人と管理者だけです。'); }
 function cleanAmount_(v, optional) {
   var s = String(v == null ? '' : v).normalize('NFKC').replace(/[,円¥\s]/g, '');
   if (!s) { if (optional) return ''; fail_('金額を入れてください。'); }
