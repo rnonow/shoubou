@@ -461,7 +461,14 @@ function renderDispatches() {
 
 // ---------- お知らせ ----------
 const imgCache = {}; // file_id -> dataURL（この画面を開いている間だけ）
-const NOTICE_MAX = 10; // お知らせに付けられる写真の枚数（10枚でも一度に送れるよう、少し小さめに縮める）
+const NOTICE_MAX = 10; // 1回に付けられる写真の枚数（お知らせ・レシート・収支簿で共通。サーバー側 MAX_IMAGES と合わせる）
+// 写真を選んだときに縮めて list に足す（上限を超えた分は知らせて捨てる。10枚でも一度に送れるよう少し小さめに縮める）
+async function addPhotos(list, files) {
+  if (list.length + files.length > NOTICE_MAX) toast("写真は" + NOTICE_MAX + "枚までです");
+  for (const f of files.slice(0, Math.max(0, NOTICE_MAX - list.length))) {
+    try { list.push(await shrinkImage(f, 1280, 0.72)); } catch (err) { toast(err.message); }
+  }
+}
 /** 写真を縮小してJPEGにする（通信量とドライブ容量を抑える） */
 function shrinkImage(file, max = 1600, quality = 0.8) {
   return new Promise((ok, ng) => {
@@ -542,10 +549,7 @@ function renderNotices() {
     </div>`; }).join("") || '<p class="muted">お知らせはまだありません。</p>'}`;
   $("#nf").onchange = async (e) => {
     const files = [...e.target.files];
-    if (pendingImages.length + files.length > NOTICE_MAX) toast("写真は" + NOTICE_MAX + "枚までです");
-    for (const f of files.slice(0, NOTICE_MAX - pendingImages.length)) {
-      try { pendingImages.push(await shrinkImage(f, 1280, 0.72)); } catch (err) { toast(err.message); }
-    }
+    await addPhotos(pendingImages, files);
     render();
   };
   document.querySelectorAll("[data-rmimg]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); pendingImages.splice(Number(b.dataset.rmimg), 1); render(); }));
@@ -645,7 +649,7 @@ function renderLedger() {
     </div>`).join("") || '<p class="muted">この年度の記録はまだありません。</p>'}`;
 
   // --- レシートを送る（だれでも）
-  $("#rf").onchange = async (e) => { for (const f of [...e.target.files].slice(0, 6 - receiptDraft.length)) { try { receiptDraft.push(await shrinkImage(f)); } catch (err) { toast(err.message); } } $("#sendr").open = true; render(); };
+  $("#rf").onchange = async (e) => { await addPhotos(receiptDraft, [...e.target.files]); $("#sendr").open = true; render(); };
   document.querySelectorAll("[data-rmr]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); receiptDraft.splice(Number(b.dataset.rmr), 1); render(); }));
   $("#rbtn").onclick = () => {
     if (!receiptDraft.length) return toast("レシートの写真を選んでください");
@@ -663,7 +667,7 @@ function renderLedger() {
     let type = ed?.type || "expense";
     document.querySelectorAll("#ltype button").forEach((b) => (b.onclick = (e) => { e.preventDefault(); type = b.dataset.t; document.querySelectorAll("#ltype button").forEach((x) => x.classList.toggle("on", x === b)); }));
     const keepForm = () => { editing = { ...(editing || {}), date: $("#ld").value, type, amount: $("#la").value, category: $("#lc").value, memo: $("#lm").value, receipt_ids: editing?.receipt_ids || [] }; };
-    $("#lf").onchange = async (e) => { keepForm(); for (const f of [...e.target.files].slice(0, 6)) { try { entryDraft.push(await shrinkImage(f)); } catch (err) { toast(err.message); } } render(); };
+    $("#lf").onchange = async (e) => { keepForm(); await addPhotos(entryDraft, [...e.target.files]); render(); };
     document.querySelectorAll("[data-rme]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); keepForm(); entryDraft.splice(Number(b.dataset.rme), 1); render(); }));
     document.querySelectorAll("[data-unlink]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); keepForm(); editing.receipt_ids = editing.receipt_ids.filter((x) => x !== b.dataset.unlink); render(); }));
     document.querySelectorAll("[data-use]").forEach((b) => (b.onclick = () => {
