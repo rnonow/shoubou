@@ -380,6 +380,7 @@ function renderDispatches() {
 
 // ---------- お知らせ ----------
 const imgCache = {}; // file_id -> dataURL（この画面を開いている間だけ）
+const NOTICE_MAX = 10; // お知らせに付けられる写真の枚数（10枚でも一度に送れるよう、少し小さめに縮める）
 /** 写真を縮小してJPEGにする（通信量とドライブ容量を抑える） */
 function shrinkImage(file, max = 1600, quality = 0.8) {
   return new Promise((ok, ng) => {
@@ -460,15 +461,17 @@ function renderNotices() {
     </div>`; }).join("") || '<p class="muted">お知らせはまだありません。</p>'}`;
   $("#nf").onchange = async (e) => {
     const files = [...e.target.files];
-    if (pendingImages.length + files.length > 6) toast("写真は6枚までです");
-    for (const f of files.slice(0, 6 - pendingImages.length)) {
-      try { pendingImages.push(await shrinkImage(f)); } catch (err) { toast(err.message); }
+    if (pendingImages.length + files.length > NOTICE_MAX) toast("写真は" + NOTICE_MAX + "枚までです");
+    for (const f of files.slice(0, NOTICE_MAX - pendingImages.length)) {
+      try { pendingImages.push(await shrinkImage(f, 1280, 0.72)); } catch (err) { toast(err.message); }
     }
     render();
   };
   document.querySelectorAll("[data-rmimg]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); pendingImages.splice(Number(b.dataset.rmimg), 1); render(); }));
   $("#nbtn").onclick = () => {
     const title = $("#nt").value.trim(); if (!title) return toast("タイトルを入れてください");
+    const total = pendingImages.reduce((a, d) => a + d.length, 0);
+    if (total > 12000000) return toast("写真のデータが大きすぎます。枚数を減らしてください");
     const body = { title, body: $("#nb").value, images: pendingImages.map((d) => ({ data: d })) };
     const previews = pendingImages.slice();
     pendingImages = []; $("#nt").value = $("#nb").value = ""; $("#newn").open = false;
