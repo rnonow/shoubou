@@ -7,8 +7,9 @@
 var SHEETS = {
   members:   ['id', 'name', 'token', 'is_admin', 'created_at', 'role'],
   // 列は必ず「末尾に追加」する（既存データの位置を変えないため）
-  dispatches:['id', 'date', 'kind', 'place', 'note', 'member_ids', 'created_by', 'created_at', 'start_time', 'end_time'],
-  events:    ['id', 'title', 'starts_at', 'place', 'note', 'created_by', 'created_at', 'ends_at'],
+  dispatches:['id', 'date', 'kind', 'place', 'note', 'member_ids', 'created_by', 'created_at', 'start_time', 'end_time', 'event_id'],
+  events:    ['id', 'title', 'starts_at', 'place', 'note', 'created_by', 'created_at', 'ends_at', 'category', 'dispatch_kind'],
+  // category：fire＝消防関係（出動記録と連動）／空・other＝その他
   rsvps:     ['event_id', 'member_id', 'status', 'comment', 'updated_at'],
   notices:   ['id', 'title', 'body', 'image_ids', 'created_by', 'created_at'],
   ledger:    ['id', 'date', 'type', 'amount', 'category', 'memo', 'receipt_ids', 'created_by', 'created_at', 'updated_at'],
@@ -117,7 +118,7 @@ var MAX_DEVICES = 5;
 // ---------- 画面から呼ばれる入口 ----------
 // 画面は action='sync' で全データを1回で受け取り、変更系の操作も最新の全データを返す。
 // 読み取りはキャッシュ（CacheService）から返すので、スプレッドシートを毎回読まない。
-var CACHE_KEY = 'snapshot_v4';
+var CACHE_KEY = 'snapshot_v5';
 
 function api(action, body, token) {
   body = body || {};
@@ -169,10 +170,11 @@ function sync_(token) {
     me: pubMember_(me),
     members: d.members.map(pubMember_),
     events: d.events.map(function (e) {
-      return { id: e.id, title: e.title, starts_at: e.starts_at, ends_at: e.ends_at, place: e.place, note: e.note, created_by: e.created_by, rsvps: byEvent[e.id] || [] };
+      return { id: e.id, title: e.title, starts_at: e.starts_at, ends_at: e.ends_at, place: e.place, note: e.note, created_by: e.created_by, rsvps: byEvent[e.id] || [],
+               category: e.category === 'fire' ? 'fire' : 'other', dispatch_kind: e.dispatch_kind || '' };
     }),
     dispatches: d.dispatches.map(function (x) {
-      return { id: x.id, date: x.date, start_time: x.start_time, end_time: x.end_time, kind: x.kind, place: x.place, note: x.note, created_by: x.created_by,
+      return { id: x.id, date: x.date, start_time: x.start_time, end_time: x.end_time, kind: x.kind, place: x.place, note: x.note, created_by: x.created_by, event_id: x.event_id || '',
                dispatch_members: x.member_ids ? x.member_ids.split(',').map(function (m) { return { member_id: m }; }) : [] };
     }),
     notices: (d.notices || []).map(function (n) {
@@ -273,9 +275,25 @@ function mutate_(action, b, token) {
 
     case 'dispatches.add':
       if (!b.date || !b.kind) fail_('日付と種別は必須です。');
+      if (b.event_id) { // イベントの出動記録がすでにあれば、新しく作らずに団員を足す（同時に入力しても重複しない）
+        var linked = rows_('dispatches').filter(function (x) { return x.event_id === b.event_id; })[0];
+        if (linked) {
+          var ids = linked.member_ids ? linked.member_ids.split(',') : [];
+          (b.member_ids || []).forEach(function (m) { if (ids.indexOf(m) < 0) ids.push(m); });
+          linked.member_ids = ids.join(','); update_('dispatches', linked._row, linked);
+          return { id: linked.id, merged: true };
+        }
+      }
       var d = { id: newId_(), date: b.date, start_time: b.start_time, end_time: b.end_time, kind: b.kind, place: b.place, note: b.note,
-                member_ids: (b.member_ids || []).join(','), created_by: me.id, created_at: now_() };
+                member_ids: (b.member_ids || []).join(','), created_by: me.id, created_at: now_(), event_id: b.event_id || '' };
       append_('dispatches', d); return { id: d.id };
+
+    case 'dispatches.addMe': // 出動記録に自分を出動した団員として加える
+      var da = rows_('dispatches').filter(function (x) { return x.id === b.id; })[0];
+      if (!da) fail_('出動記録が見つかりません。');
+      var dids = da.member_ids ? da.member_ids.split(',') : [];
+      if (dids.indexOf(me.id) < 0) { dids.push(me.id); da.member_ids = dids.join(','); update_('dispatches', da._row, da); }
+      return { ok: true };
 
     case 'dispatches.delete':
       var dd = rows_('dispatches').filter(function (x) { return x.id === b.id; })[0];
@@ -356,7 +374,8 @@ function mutate_(action, b, token) {
 
     case 'events.add':
       if (!b.title || !b.starts_at) fail_('タイトルと日時は必須です。');
-      var ev = { id: newId_(), title: b.title, starts_at: b.starts_at, ends_at: b.ends_at, place: b.place, note: b.note, created_by: me.id, created_at: now_() };
+      var ev = { id: newId_(), title: b.title, starts_at: b.starts_at, ends_at: b.ends_at, place: b.place, note: b.note, created_by: me.id, created_at: now_(),
+                 category: b.category === 'fire' ? 'fire' : 'other', dispatch_kind: b.category === 'fire' ? (b.dispatch_kind || '訓練') : '' };
       append_('events', ev); return { id: ev.id };
 
     case 'events.delete':
