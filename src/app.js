@@ -30,9 +30,12 @@ function call(action, body = {}) {
   });
 }
 function busy(d) { state.pending += d; $("#sync").hidden = state.pending <= 0; }
+// 起動直後・再読み込み中に出す表示（build.py の最初の画面と同じもの）
+const LOADING_HTML = '<div class="loading"><div class="spin"></div><p>読み込み中…</p><p class="muted">開くまでに数秒かかることがあります</p></div>';
 function setData(d) {
   if (!d || !d.me) return;
   state.data = d;
+  if (d.team_name) $("#team").textContent = "🚒 " + d.team_name;
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(d)); } catch {}
   render();
 }
@@ -57,7 +60,7 @@ function showError(msg) {
     <p>${esc(msg || "通信エラー")}</p>
     <p class="muted">電波のよい所でもう一度試してください。続くときは、この画面を管理者に見せてください。</p>
     <p><button class="btn" id="retry">もう一度読み込む</button></p></div>`;
-  $("#retry").onclick = () => { $("#app").innerHTML = '<p class="muted">読み込み中…</p>'; sync(); };
+  $("#retry").onclick = () => { $("#app").innerHTML = LOADING_HTML; sync(); };
 }
 /** 画面を先に書き換え（optimistic）、裏でサーバーに送る。失敗したら最新データに戻す */
 async function mutate(action, body, optimistic) {

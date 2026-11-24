@@ -48,13 +48,18 @@ function doGet(e) {
   t.focusEvent = p.event || '';
   // 登録はURLの k=… に持たせる（iPhoneなどではアプリを閉じると端末内の保存が消えることがあるため）
   t.token = p.k || '';
-  // 最初の画面に必要なデータを一緒に埋め込み、開いてすぐ表示できるようにする
-  var first = null;
+  // 最初の画面に必要なデータは「キャッシュにあるときだけ」埋め込む。
+  // キャッシュが無いときにここでスプレッドシートを全部読むと、その間（数秒）画面が真っ白／真っ黒のままになるので、
+  // まず画面（読み込み中の表示）を返し、データは画面側から取りに来てもらう。
+  var first = null, snap = null;
   t.bootError = '';
-  try { first = t.token ? sync_(t.token) : null; } catch (err) { t.bootError = String(err && err.message || err); Logger.log(err && err.stack || err); }
+  try {
+    snap = cachedSnapshot_();
+    if (snap && t.token) first = sync_(t.token, snap);
+  } catch (err) { t.bootError = String(err && err.message || err); Logger.log(err && err.stack || err); }
   t.initial = first && first.me ? JSON.stringify(first) : '';
   t.appUrl = ScriptApp.getService().getUrl();
-  t.teamName = setting_(2) || '消防団';
+  t.teamName = (snap && snap.team_name) || teamName_();
   return t.evaluate()
     .setTitle(t.teamName + ' 連絡アプリ')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
@@ -143,6 +148,23 @@ function api(action, body, token) {
   return out;
 }
 
+// 団の名前だけは別に覚えておく（起動時に全データのキャッシュが切れていても、スプレッドシートを開かずに済むように）
+var TEAM_KEY = 'team_name_v1';
+function teamName_() {
+  var cache = CacheService.getScriptCache();
+  var name = cache.get(TEAM_KEY);
+  if (name) return name;
+  name = setting_(2) || '消防団';
+  cache.put(TEAM_KEY, name, 21600);
+  return name;
+}
+
+/** キャッシュにある全データ（無ければ null。スプレッドシートは読まない） */
+function cachedSnapshot_() {
+  var hit = CacheService.getScriptCache().get(CACHE_KEY);
+  return hit ? JSON.parse(hit) : null;
+}
+
 /** スプレッドシート全体を読み込む（キャッシュがあればそれを使う） */
 function load_() {
   var cache = CacheService.getScriptCache();
@@ -155,11 +177,12 @@ function load_() {
   };
   var json = JSON.stringify(d);
   if (json.length < 95000) cache.put(CACHE_KEY, json, 21600); // 最大6時間。書き込みがあれば即消す
+  if (d.team_name) cache.put(TEAM_KEY, d.team_name, 21600);
   return d;
 }
 
-function sync_(token) {
-  var d = load_();
+function sync_(token, snap) {
+  var d = snap || load_();
   var me = findByToken_(d.members, token);
   if (!me) return { me: null };
   var byEvent = {};
@@ -472,4 +495,4 @@ function authorize() {
 }
 
 /** スプレッドシートを手で直接書き換えたあとは、これを実行するとすぐ画面に反映される（放っておいても6時間で反映） */
-function clearCache() { CacheService.getScriptCache().remove(CACHE_KEY); }
+function clearCache() { CacheService.getScriptCache().removeAll([CACHE_KEY, TEAM_KEY]); }

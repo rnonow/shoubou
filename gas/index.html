@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ja"><head>
 <base target="_top">
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta charset="utf-8"><meta name="color-scheme" content="light"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>消防団連絡アプリ</title>
 <style>
 [hidden]{display:none!important}
@@ -85,12 +85,17 @@ nav .ic{font-size:30px;line-height:1.1}
 .firelink{margin-top:8px;font-size:15px}
 nav button.badge{position:relative}
 nav button.badge::after{content:"";position:absolute;top:4px;right:calc(50% - 22px);width:12px;height:12px;border-radius:50%;background:#e53935;border:2px solid #fff}
+html{background:#f4f4f5}
+.loading{text-align:center;padding:48px 16px;color:#555}
+.loading p{margin:6px 0}
+.spin{width:36px;height:36px;margin:0 auto 14px;border:4px solid #f3c4c4;border-top-color:#c62828;border-radius:50%;animation:spin 0.9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 <script>window.APP_CONFIG = { MODE: "gas", APP_URL: <?= appUrl ?>, FOCUS_EVENT: <?= focusEvent ?>, TOKEN: <?= token ?>, INITIAL: <?= initial ?>, BOOT_ERROR: <?= bootError ?>, TEAM_NAME: <?= teamName ?> };</script>
 </head><body>
 <header><span id="team">🚒 消防団</span><span id="who"></span></header>
 <div id="demo" hidden>お試しモード：データはこの端末だけに保存されます</div>
-<main id="app"><p class="muted">読み込み中…</p></main>
+<main id="app"><div class="loading"><div class="spin"></div><p>読み込み中…</p><p class="muted">開くまでに数秒かかることがあります</p></div></main>
 <nav id="nav" hidden>
   <button data-tab="notices"><span class="ic">📢</span>お知らせ</button>
   <button data-tab="events"><span class="ic">📅</span>イベント</button>
@@ -149,9 +154,12 @@ function call(action, body = {}) {
   });
 }
 function busy(d) { state.pending += d; $("#sync").hidden = state.pending <= 0; }
+// 起動直後・再読み込み中に出す表示（build.py の最初の画面と同じもの）
+const LOADING_HTML = '<div class="loading"><div class="spin"></div><p>読み込み中…</p><p class="muted">開くまでに数秒かかることがあります</p></div>';
 function setData(d) {
   if (!d || !d.me) return;
   state.data = d;
+  if (d.team_name) $("#team").textContent = "🚒 " + d.team_name;
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(d)); } catch {}
   render();
 }
@@ -176,7 +184,7 @@ function showError(msg) {
     <p>${esc(msg || "通信エラー")}</p>
     <p class="muted">電波のよい所でもう一度試してください。続くときは、この画面を管理者に見せてください。</p>
     <p><button class="btn" id="retry">もう一度読み込む</button></p></div>`;
-  $("#retry").onclick = () => { $("#app").innerHTML = '<p class="muted">読み込み中…</p>'; sync(); };
+  $("#retry").onclick = () => { $("#app").innerHTML = LOADING_HTML; sync(); };
 }
 
 async function mutate(action, body, optimistic) {
