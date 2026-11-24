@@ -79,3 +79,8 @@ nav .ic{font-size:30px;line-height:1.1}
 .firelink{margin-top:8px;font-size:15px}
 nav button.badge{position:relative}
 nav button.badge::after{content:"";position:absolute;top:4px;right:calc(50% - 22px);width:12px;height:12px;border-radius:50%;background:#e53935;border:2px solid #fff}
+html{background:#f4f4f5}
+.loading{text-align:center;padding:48px 16px;color:#555}
+.loading p{margin:6px 0}
+.spin{width:36px;height:36px;margin:0 auto 14px;border:4px solid #f3c4c4;border-top-color:#c62828;border-radius:50%;animation:spin 0.9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}

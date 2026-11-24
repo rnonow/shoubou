@@ -13,7 +13,7 @@ def page(cfg, title):
     return f"""<!DOCTYPE html>
 <html lang="ja"><head>
 <base target="_top">
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta charset="utf-8"><meta name="color-scheme" content="light"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>{title}</title>
 <style>
 {css}</style>
@@ -21,7 +21,7 @@ def page(cfg, title):
 </head><body>
 <header><span id="team">🚒 消防団</span><span id="who"></span></header>
 <div id="demo" hidden>お試しモード：データはこの端末だけに保存されます</div>
-<main id="app"><p class="muted">読み込み中…</p></main>
+<main id="app"><div class="loading"><div class="spin"></div><p>読み込み中…</p><p class="muted">開くまでに数秒かかることがあります</p></div></main>
 <nav id="nav" hidden>
   <button data-tab="notices"><span class="ic">📢</span>お知らせ</button>
   <button data-tab="events"><span class="ic">📅</span>イベント</button>
