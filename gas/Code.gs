@@ -400,7 +400,7 @@ function onEdit() { clearCache(); }
 
 // ---------- お知らせの写真（Googleドライブに非公開で保存） ----------
 var IMAGE_FOLDER = '消防団アプリ_お知らせ写真';
-var MAX_IMAGES = { notice: 10, receipt: 6 }; // 1回に送れる写真の枚数
+var MAX_IMAGES = { notice: 10, receipt: 10 }; // 1回に送れる写真の枚数（画面側 NOTICE_MAX と合わせる）
 
 function requireMember_(token) {
   var me = findByToken_(load_().members, token);
@@ -420,7 +420,7 @@ function imageFolder_(kind) {
   return f;
 }
 function saveImages_(images, kind) {
-  var max = MAX_IMAGES[kind] || 6;
+  var max = MAX_IMAGES[kind] || 10;
   if (images.length > max) fail_('写真は' + max + '枚までです。');
   if (!images.length) return [];
   var folder = imageFolder_(kind);
