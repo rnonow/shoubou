@@ -12,10 +12,14 @@ var SHEETS = {
   // category：fire＝消防関係（出動記録と連動）／空・other＝その他
   rsvps:     ['event_id', 'member_id', 'status', 'comment', 'updated_at'],
   notices:   ['id', 'title', 'body', 'image_ids', 'created_by', 'created_at'],
-  ledger:    ['id', 'date', 'type', 'amount', 'category', 'memo', 'receipt_ids', 'created_by', 'created_at', 'updated_at'],
+  ledger:    ['id', 'date', 'type', 'amount', 'category', 'memo', 'receipt_ids', 'created_by', 'created_at', 'updated_at', 'account', 'member_id'],
+  // type：income＝収入／expense＝支出／transfer＝銀行と現金のあいだの移動（収入・支出には数えない）
+  // account：cash＝現金（手元の財布）／bank＝銀行。transfer のときは「出したほう」（bank＝引き出し、cash＝預け入れ）。空は現金扱い
+  // member_id：活動費を払った団員（活動費の行だけ）
   receipts:  ['id', 'file_id', 'amount', 'memo', 'sent_by', 'sent_at', 'status', 'entry_id'],
+  dues:      ['fy', 'amount', 'updated_at'], // 年度ごとの活動費（1人あたりの金額）
 };
-var SHEET_NAMES = { members: '団員', dispatches: '出動記録', events: 'イベント', rsvps: '出欠', notices: 'お知らせ', ledger: '収支簿', receipts: 'レシート' };
+var SHEET_NAMES = { members: '団員', dispatches: '出動記録', events: 'イベント', rsvps: '出欠', notices: 'お知らせ', ledger: '収支簿', receipts: 'レシート', dues: '活動費' };
 var SETTINGS = '設定';
 var ROLES = ['部長', '副部長', '会計']; // 各1人まで
 
@@ -123,12 +127,13 @@ var MAX_DEVICES = 5;
 // ---------- 画面から呼ばれる入口 ----------
 // 画面は action='sync' で全データを1回で受け取り、変更系の操作も最新の全データを返す。
 // 読み取りはキャッシュ（CacheService）から返すので、スプレッドシートを毎回読まない。
-var CACHE_KEY = 'snapshot_v5';
+var CACHE_KEY = 'snapshot_v6';
 
 function api(action, body, token) {
   body = body || {};
   if (action === 'sync') return sync_(token);
   if (action === 'notices.image' || action === 'image') return image_(token, body.file_id, body.thumb);
+  if (action === 'ledger.pdf') return ledgerPdf_(token, body);
   // 時間のかかる処理（ドライブへの保存）はロックの外で先に行う
   if (action === 'notices.add') { requireMember_(token); body.image_ids = saveImages_(body.images || [], 'notice'); delete body.images; }
   if (action === 'receipts.add' || action === 'ledger.add' || action === 'ledger.update') {
@@ -172,7 +177,7 @@ function load_() {
   if (hit) return JSON.parse(hit);
   var d = {
     members: rows_('members'), events: rows_('events'), rsvps: rows_('rsvps'), dispatches: rows_('dispatches'), notices: rows_('notices'),
-    ledger: rows_('ledger'), receipts: rows_('receipts'),
+    ledger: rows_('ledger'), receipts: rows_('receipts'), dues: rows_('dues'),
     join_code: setting_(1), team_name: setting_(2),
   };
   var json = JSON.stringify(d);
@@ -206,11 +211,13 @@ function sync_(token, snap) {
     }),
     ledger: (d.ledger || []).map(function (x) {
       return { id: x.id, date: x.date, type: x.type, amount: Number(x.amount) || 0, category: x.category, memo: x.memo,
-               receipt_ids: x.receipt_ids ? x.receipt_ids.split(',') : [], created_by: x.created_by, updated_at: x.updated_at || x.created_at };
+               receipt_ids: x.receipt_ids ? x.receipt_ids.split(',') : [], created_by: x.created_by, updated_at: x.updated_at || x.created_at,
+               account: x.account === 'bank' ? 'bank' : 'cash', member_id: x.member_id || '' };
     }),
     receipts: (d.receipts || []).map(function (r) {
       return { id: r.id, file_id: r.file_id, amount: r.amount ? Number(r.amount) : null, memo: r.memo, sent_by: r.sent_by, sent_at: r.sent_at, status: r.status, entry_id: r.entry_id };
     }),
+    dues: (d.dues || []).map(function (x) { return { fy: Number(x.fy), amount: Number(x.amount) || 0 }; }),
     can_account: canAccount_(me, d.members),
     team_name: d.team_name,
   };
@@ -357,7 +364,8 @@ function mutate_(action, b, token) {
       var entry = action === 'ledger.update' ? rows_('ledger').filter(function (x) { return x.id === b.id; })[0] : null;
       if (action === 'ledger.update' && !entry) fail_('収支の行が見つかりません。');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(b.date || '')) fail_('日付を入れてください。');
-      if (['income', 'expense'].indexOf(b.type) < 0) fail_('収入か支出かを選んでください。');
+      if (['income', 'expense', 'transfer'].indexOf(b.type) < 0) fail_('収入・支出・移動のどれかを選んでください。');
+      if (['cash', 'bank'].indexOf(b.account || 'cash') < 0) fail_('現金か銀行かを選んでください。');
       var amount = cleanAmount_(b.amount, false);
       var recs = rows_('receipts');
       // この行に付けるレシート：選んだ既存レシート＋会計が直接付けた写真
@@ -369,6 +377,8 @@ function mutate_(action, b, token) {
       var e2 = entry || { id: newId_(), created_by: me.id, created_at: now_() };
       var before = entry && entry.receipt_ids ? entry.receipt_ids.split(',') : [];
       e2.date = b.date; e2.type = b.type; e2.amount = String(amount); e2.category = b.category || ''; e2.memo = b.memo || '';
+      e2.account = b.account === 'bank' ? 'bank' : 'cash';
+      e2.member_id = b.type === 'income' && b.member_id ? String(b.member_id) : ''; // 活動費を払った団員
       e2.receipt_ids = keep.join(','); e2.updated_at = now_();
       if (entry) update_('ledger', entry._row, e2); else append_('ledger', e2);
       // レシートの状態をそろえる
@@ -378,6 +388,15 @@ function mutate_(action, b, token) {
         else if (!on && was) { r.status = 'pending'; r.entry_id = ''; update_('receipts', r._row, r); }
       });
       return { id: e2.id };
+
+    case 'dues.set': // 活動費（1人あたり）を年度ごとに決める
+      requireAccount_(me, members);
+      if (!/^\d{4}$/.test(String(b.fy || ''))) fail_('年度が正しくありません。');
+      var dueAmount = cleanAmount_(b.amount, false);
+      var due = rows_('dues').filter(function (x) { return String(x.fy) === String(b.fy); })[0];
+      var dueRow = { fy: String(b.fy), amount: dueAmount, updated_at: now_() };
+      if (due) update_('dues', due._row, dueRow); else append_('dues', dueRow);
+      return { ok: true };
 
     case 'ledger.delete': // レシートは消さずに「未処理」に戻す
       requireAccount_(me, members);
@@ -461,6 +480,35 @@ function image_(token, fileId, thumb) {
   if (thumb) { try { blob = file.getThumbnail(); } catch (e) {} } // 一覧用は小さい画像（速い）。まだ作られていなければ元の写真
   if (!blob) blob = file.getBlob();
   return { data: 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes()) };
+}
+
+// ---------- 収支簿の年間まとめ（PDF） ----------
+/**
+ * 画面で作った「年間まとめ」のHTMLをPDFにして返す（団員ならだれでも）。
+ * HTMLの中の {{IMG:写真ID}} は、レシートの写真に差し替える（レシート以外の写真・ファイルは入れない）。
+ * 写真が多くて重いときは、途中から小さい画像（サムネイル）にして、PDFが大きくなりすぎないようにする。
+ */
+var PDF_PHOTO_LIMIT = 10 * 1024 * 1024;
+function ledgerPdf_(token, b) {
+  requireMember_(token);
+  var html = String(b.html || '');
+  if (!html || html.length > 3000000) fail_('まとめの内容が大きすぎます。');
+  var allowed = {};
+  (load_().receipts || []).forEach(function (r) { if (r.file_id) allowed[r.file_id] = true; });
+  var total = 0;
+  html = html.replace(/\{\{IMG:([\w-]+)\}\}/g, function (m, fid) {
+    if (!allowed[fid]) return '';
+    try {
+      var file = DriveApp.getFileById(fid), blob = null;
+      if (total > PDF_PHOTO_LIMIT) { try { blob = file.getThumbnail(); } catch (e) {} }
+      if (!blob) blob = file.getBlob();
+      var bytes = blob.getBytes(); total += bytes.length;
+      return 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(bytes);
+    } catch (e) { return ''; }
+  });
+  var name = String(b.name || '収支簿.pdf').replace(/[\\/:*?"<>|]/g, '');
+  var pdf = Utilities.newBlob(html, 'text/html', 'report.html').getAs('application/pdf').setName(name);
+  return { data: Utilities.base64Encode(pdf.getBytes()), name: name };
 }
 
 // ---------- 収支簿の権限 ----------
