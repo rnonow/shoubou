@@ -764,7 +764,7 @@ function renderLedger() {
   $("#app").innerHTML = `
     <div class="card"><div class="muted">現在の残高</div><div class="big ${balance < 0 ? "neg" : ""}">${yen(balance)}</div>
       <table style="margin:4px 0 6px"><tr><td>💴 現金（手元の財布）</td><td class="n ${bal.cash < 0 ? "exp" : ""}">${yen(bal.cash)}</td></tr><tr><td>🏦 銀行</td><td class="n ${bal.bank < 0 ? "exp" : ""}">${yen(bal.bank)}</td></tr></table>
-      <div class="muted">会計：${treasurer ? label(treasurer) : "（未設定。団員タブの「役職」で決めてください）"}</div></div>
+      <div class="muted">会計：${treasurer ? label(treasurer) : "（未設定。管理者が団員タブの「役職」で決めてください。決まるまでは管理者が記録できます）"}</div></div>
 
     <details class="card" id="sendr"><summary>📷 レシートを送る（だれでも）</summary>
       <p class="muted">立て替えたときなどに、レシートの写真を会計の人に送れます。</p>
@@ -816,11 +816,11 @@ function renderLedger() {
         <td class="n">${acct && r.state !== "done" && D.members.some((m) => m.id === r.id) ? `<button class="btn small" data-due="${r.id}">受け取った</button>` : ""}${acct && r.list.length ? ` <button class="btn sub small" data-undue="${r.id}">取り消す</button>` : ""}</td></tr>`).join("")}</table>
     </details>
 
-    <div class="card"><h3>📄 ${state.fy}年度のまとめを出力</h3>
+    ${acct ? `<div class="card"><h3>📄 ${state.fy}年度のまとめを出力</h3>
       <p class="muted">1年分（${state.fy}年4月〜${state.fy + 1}年3月）の収入・支出の一覧、合計、現金・銀行の残高、${DUES}の集金状況を1つのファイルにします。印刷や総会の資料に使えます。</p>
       <label class="row" style="gap:6px"><input type="checkbox" id="rpph" checked style="width:auto;margin:0"> レシートの写真もPDFに入れる</label>
       <p class="row"><button class="btn small" id="rppdf">PDFで保存</button><button class="btn sub small" id="rpcsv">Excel用（CSV）で保存</button></p>
-      <div id="rpout"></div></div>
+      <div id="rpout"></div></div>` : `<p class="muted">収支の記録・修正、活動費の受け取り、まとめの出力は会計の人と管理者だけができます。ほかの人はレシートを送れます。</p>`}
 
     ${inFy.map((x) => `<div class="card">
       <div class="spread"><div><span class="muted">${esc(x.date)}</span>　${esc(x.category) || ""} <span class="tag">${placeName(x)}</span></div><b class="${x.type === "income" ? "inc" : x.type === "expense" ? "exp" : ""}">${x.type === "income" ? "+" : x.type === "expense" ? "−" : "⇄ "}${yen(x.amount)}</b></div>
@@ -845,10 +845,10 @@ function renderLedger() {
     const id = b.dataset.delr; mutate("receipts.delete", { id }, (d) => (d.receipts = d.receipts.filter((r) => r.id !== id))).catch(ignore);
   }));
   $("#fy").onchange = (e) => { state.fy = Number(e.target.value); render(); };
-  // --- 年間まとめ（だれでも）
-  $("#rppdf").onclick = () => exportLedgerPdf(state.fy, $("#rpph").checked);
-  $("#rpcsv").onclick = () => exportLedgerCsv(state.fy);
   if (acct) {
+    // --- 年間まとめ（会計・管理者だけ）
+    $("#rppdf").onclick = () => exportLedgerPdf(state.fy, $("#rpph").checked);
+    $("#rpcsv").onclick = () => exportLedgerCsv(state.fy);
     let type = edType, acc = edAcc;
     const bindAcc = () => document.querySelectorAll("#lacc button").forEach((b) => (b.onclick = (e) => { e.preventDefault(); acc = b.dataset.a; document.querySelectorAll("#lacc button").forEach((x) => x.classList.toggle("on", x === b)); }));
     bindAcc();
