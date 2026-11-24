@@ -81,6 +81,10 @@ nav .ic{font-size:30px;line-height:1.1}
 @media (max-width:340px){nav .ic{font-size:26px}nav button{font-size:11px}}
 .thumb i{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;font-style:normal;font-size:12px;color:#666;padding:4px}
 .thumb[data-fid]{cursor:pointer}
+.todo{border:2px solid #c62828;background:#fff5f5}
+.firelink{margin-top:8px;font-size:15px}
+nav button.badge{position:relative}
+nav button.badge::after{content:"";position:absolute;top:4px;right:calc(50% - 22px);width:12px;height:12px;border-radius:50%;background:#e53935;border:2px solid #fff}
 </style>
 <script>window.APP_CONFIG = { MODE: "demo", TEAM_NAME: "消防団" };</script>
 </head><body>
@@ -131,7 +135,7 @@ function setToken(t) {
 }
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const state = { data: null, tab: "events", year: new Date().getFullYear(), past: false, focusEvent: null, pending: 0 };
+const state = { data: null, tab: "events", year: new Date().getFullYear(), past: false, focusEvent: null, pending: 0, prefill: null, noKeep: false };
 
 // ---------- 通信 ----------
 // サーバーは常に「全データ」を返す。画面はそれを state.data に持ち、タブ切替などでは通信しない。
@@ -225,11 +229,15 @@ function mock(action, b) {
       case "ledger.delete": db.ledger = db.ledger.filter((x) => x.id !== b.id); db.receipts.forEach((r) => { if (r.entry_id === b.id) { r.status = "pending"; r.entry_id = ""; } }); break;
       case "members.logoutAll": result = { ok: true, count: db.members.length - 1 }; break;
       case "members.remove": db.members = db.members.filter((m) => m.id !== b.id); break;
-      case "dispatches.add": result = { id: String(++db.seq) };
-        db.dispatches.push({ id: result.id, date: b.date, start_time: b.start_time, end_time: b.end_time, kind: b.kind, place: b.place, note: b.note, created_by: meId, dispatch_members: (b.member_ids || []).map((x) => ({ member_id: x })) }); break;
+      case "dispatches.add": {
+        const linked = b.event_id && db.dispatches.find((x) => x.event_id === b.event_id);
+        if (linked) { (b.member_ids || []).forEach((m) => { if (!linked.dispatch_members.some((x) => x.member_id === m)) linked.dispatch_members.push({ member_id: m }); }); result = { id: linked.id, merged: true }; break; }
+        result = { id: String(++db.seq) };
+        db.dispatches.push({ id: result.id, date: b.date, start_time: b.start_time, end_time: b.end_time, kind: b.kind, place: b.place, note: b.note, event_id: b.event_id || "", created_by: meId, dispatch_members: (b.member_ids || []).map((x) => ({ member_id: x })) }); break; }
+      case "dispatches.addMe": { const x = db.dispatches.find((d) => d.id === b.id); if (x && !x.dispatch_members.some((m) => m.member_id === meId)) x.dispatch_members.push({ member_id: meId }); break; }
       case "dispatches.delete": db.dispatches = db.dispatches.filter((d) => d.id !== b.id); break;
       case "events.add": result = { id: String(++db.seq) };
-        db.events.push({ id: result.id, title: b.title, starts_at: b.starts_at, ends_at: b.ends_at, place: b.place, note: b.note, created_by: meId, rsvps: [] }); break;
+        db.events.push({ id: result.id, title: b.title, starts_at: b.starts_at, ends_at: b.ends_at, place: b.place, note: b.note, category: b.category, dispatch_kind: b.dispatch_kind, created_by: meId, rsvps: [] }); break;
       case "events.delete": db.events = db.events.filter((e) => e.id !== b.id); break;
       case "events.rsvp": { const e = ev(b.event_id);
         e.rsvps = e.rsvps.filter((r) => r.member_id !== meId).concat({ member_id: meId, status: b.status, comment: b.comment }); break; }
@@ -254,7 +262,7 @@ function seed() {
     ],
     events: [
       { id: "10", title: "年末夜警", starts_at: at(14, 19), ends_at: at(14, 22), place: "第1分団詰所", note: "防寒着持参", created_by: "m0", rsvps: [{ member_id: "m0", status: "yes" }, { member_id: "m2", status: "yes" }, { member_id: "m4", status: "no", comment: "仕事のため" }, { member_id: "m5", status: "maybe" }] },
-      { id: "11", title: "ポンプ操法 訓練", starts_at: at(5, 8), ends_at: at(5, 12), place: "小学校グラウンド", note: "", created_by: "m1", rsvps: [{ member_id: "m1", status: "yes" }] },
+      { id: "11", title: "ポンプ操法 訓練", starts_at: at(5, 8), ends_at: at(5, 12), place: "小学校グラウンド", note: "", category: "fire", dispatch_kind: "訓練", created_by: "m1", rsvps: [{ member_id: "m1", status: "yes" }] },
     ],
   };
 }
@@ -297,7 +305,7 @@ function boot() {
   if (DEMO) $("#demo").hidden = false;
   const focus = CFG.FOCUS_EVENT || new URLSearchParams(location.search).get("event");
   if (focus) { state.focusEvent = String(focus); state.tab = "events"; }
-  document.querySelectorAll("#nav button").forEach((b) => (b.onclick = () => { state.tab = b.dataset.tab; state.focusEvent = null; render(); window.scrollTo(0, 0); }));
+  document.querySelectorAll("#nav button").forEach((b) => (b.onclick = () => { state.tab = b.dataset.tab; state.focusEvent = null; state.prefill = null; render(); window.scrollTo(0, 0); }));
   if (!token) return showJoin();
   if (!CFG.TOKEN) setToken(token); // 端末内にだけ残っていた登録をURLにも反映
   else try { localStorage.setItem(TOKEN_KEY, token); } catch {}
@@ -347,13 +355,68 @@ function renderInner() {
   $("#who").textContent = me().name + (me().is_admin ? "（管理者）" : "");
   document.querySelectorAll("#nav button").forEach((b) => b.classList.toggle("on", b.dataset.tab === state.tab));
   // 入力途中の内容は書き換えで消えないよう退避して戻す
-  const keep = {}; document.querySelectorAll("#app input, #app textarea, #app select").forEach((i) => { if (i.id) keep[i.id] = i.type === "checkbox" ? i.checked : i.value; });
+  const keep = {}; if (!state.noKeep) document.querySelectorAll("#app input, #app textarea, #app select").forEach((i) => { if (i.id) keep[i.id] = i.type === "checkbox" ? i.checked : i.value; });
   const open = [...document.querySelectorAll("#app details[open]")].map((d) => d.id);
   const focused = document.activeElement && document.activeElement.id;
   ({ notices: renderNotices, events: renderEvents, dispatches: renderDispatches, ledger: renderLedger, members: renderMembers })[state.tab]();
+  state.noKeep = false;
+  renderTodo();
   Object.entries(keep).forEach(([id, v]) => { const i = document.getElementById(id); if (i && i.dataset.keep !== "no") { if (i.type === "checkbox") i.checked = v; else i.value = v; } });
   open.forEach((id) => { const d = id && document.getElementById(id); if (d) d.open = true; });
   if (focused) document.getElementById(focused)?.focus();
+  document.querySelectorAll("#app [data-sync]").forEach((el) => el.onchange && el.onchange()); // 戻した値に合わせて表示を切り替える
+}
+
+// ---------- 消防関係のイベントと出動記録の連動 ----------
+const ymdLocal = (iso) => new Date(iso).toLocaleDateString("sv-SE"); // 端末の日付で YYYY-MM-DD
+const isFire = (e) => e.category === "fire";
+const linkedDispatch = (e) => state.data.dispatches.find((d) => d.event_id === e.id);
+const eventStarted = (e) => ymdLocal(e.starts_at) <= new Date().toLocaleDateString("sv-SE"); // イベントの日になったか
+const isAttendee = (e) => e.rsvps.some((r) => r.member_id === me().id && (r.status === "yes" || r.status === "maybe"));
+
+function todoEvents() {
+  const limit = new Date(Date.now() - 14 * 864e5).toLocaleDateString("sv-SE");
+  return state.data.events.filter((e) => isFire(e) && !e.id.startsWith("tmp") && eventStarted(e) && ymdLocal(e.starts_at) >= limit && isAttendee(e)
+    && !(linkedDispatch(e)?.dispatch_members || []).some((x) => x.member_id === me().id));
+}
+function renderTodo() {
+  const list = todoEvents();
+  const nb = document.querySelector('#nav button[data-tab="dispatches"]');
+  if (nb) nb.classList.toggle("badge", list.length > 0);
+  if (!list.length || state.tab === "members" || state.tab === "ledger") return;
+  const box = document.createElement("div");
+  box.className = "card todo";
+  box.innerHTML = `<h3>🚒 出動記録を入力してください</h3>` + list.map((e) => {
+    const d = linkedDispatch(e);
+    return `<div class="spread" style="margin-top:6px"><div><b>${esc(e.title)}</b><div class="muted">${fmtRange(e.starts_at, e.ends_at)}</div></div>
+      ${d ? `<button class="btn small" data-addme="${d.id}">自分も出動に追加</button>` : `<button class="btn small" data-rec="${e.id}">入力する</button>`}</div>`;
+  }).join("");
+  $("#app").prepend(box);
+  box.querySelectorAll("[data-rec]").forEach((b) => (b.onclick = () => startRecord(b.dataset.rec)));
+  box.querySelectorAll("[data-addme]").forEach((b) => (b.onclick = () => addMe(b.dataset.addme)));
+}
+
+function startRecord(eventId) {
+  state.prefill = state.data.events.find((e) => e.id === eventId) || null;
+  state.tab = "dispatches"; state.focusEvent = null; state.noKeep = true;
+  if (state.prefill) state.year = Number(ymdLocal(state.prefill.starts_at).slice(0, 4));
+  render(); window.scrollTo(0, 0);
+}
+function addMe(dispatchId) {
+  mutate("dispatches.addMe", { id: dispatchId }, (d) => {
+    const x = d.dispatches.find((y) => y.id === dispatchId);
+    if (x && !x.dispatch_members.some((m) => m.member_id === d.me.id)) x.dispatch_members.push({ member_id: d.me.id });
+  }).catch(ignore);
+  toast("出動記録に追加しました");
+}
+
+function fireStatus(e) {
+  if (!isFire(e)) return "";
+  const d = linkedDispatch(e);
+  if (d) return `<div class="firelink">✅ 出動記録あり（${d.dispatch_members.length}人）${d.dispatch_members.some((x) => x.member_id === me().id) ? "" : ` <button class="btn sub small" data-addme="${d.id}">自分も追加</button>`}</div>`;
+  if (e.id.startsWith("tmp")) return "";
+  if (!eventStarted(e)) return `<div class="firelink muted">当日になると、参加者に出動記録の入力をお願いします</div>`;
+  return `<div class="firelink">出動記録はまだです <button class="btn small" data-rec="${e.id}">出動記録を入力</button></div>`;
 }
 
 // ---------- イベント ----------
@@ -372,9 +435,10 @@ function renderEvents() {
     const tags = (list, cls) => list.map((r) => `<span class="tag ${cls}">${label(r.member_id)}${r.comment ? "：" + esc(r.comment) : ""}</span>`).join("");
     const tmp = e.id.startsWith("tmp");
     return `<div class="card" id="ev${e.id}" ${state.focusEvent === e.id ? 'style="outline:3px solid #c62828"' : ""}>
-      <div class="spread"><h3>${esc(e.title)}</h3>${canEdit(e.created_by) && !tmp ? `<button class="btn sub small" data-del-ev="${e.id}">削除</button>` : ""}</div>
+      <div class="spread"><h3>${isFire(e) ? '<span class="kind">🚒 消防関係</span> ' : ""}${esc(e.title)}</h3>${canEdit(e.created_by) && !tmp ? `<button class="btn sub small" data-del-ev="${e.id}">削除</button>` : ""}</div>
       <div class="muted">🕒 ${fmtRange(e.starts_at, e.ends_at)}${e.place ? "　📍" + esc(e.place) : ""}</div>
       ${e.note ? `<div style="margin-top:6px;white-space:pre-wrap">${esc(e.note)}</div>` : ""}
+      ${fireStatus(e)}
       ${tmp ? '<p class="muted">保存中…</p>' : `
       <div class="rsvp" data-ev="${e.id}">
         ${[["yes", "参加"], ["maybe", "未定"], ["no", "不参加"]].map(([s, l]) => `<button class="${s} ${mine?.status === s ? "on" : ""}" data-s="${s}">${l}</button>`).join("")}
@@ -389,6 +453,9 @@ function renderEvents() {
   }).join("");
   $("#app").innerHTML = `
     <details class="card" id="newev"><summary>＋ イベントを作る</summary>
+      <label>種別</label><select id="ecat" data-sync="1"><option value="other">その他</option><option value="fire">消防関係（出動記録と連動）</option></select>
+      <div id="ekbox" hidden><label>出動記録の種別</label><select id="ekind">${KINDS.map((k) => `<option ${k === "訓練" ? "selected" : ""}>${k}</option>`).join("")}</select>
+        <p class="muted" style="margin:4px 0 0">イベントの日になると、参加と答えた人に出動記録の入力をお願いする表示が出ます。</p></div>
       <label>タイトル</label><input id="et" placeholder="例：年末夜警">
       <label>日付</label><input type="date" id="ed">
       <div class="row"><div style="flex:1"><label>開始</label><input type="time" id="es"></div><div style="flex:1"><label>終了</label><input type="time" id="ee"></div></div>
@@ -399,12 +466,14 @@ function renderEvents() {
       <button class="btn sub small" id="tp">${state.past ? "これからを見る" : "過去を見る"}</button></div>
     ${html || '<p class="muted">イベントはまだありません。</p>'}`;
   $("#tp").onclick = () => { state.past = !state.past; render(); };
+  $("#ecat").onchange = () => { $("#ekbox").hidden = $("#ecat").value !== "fire"; };
   $("#eb").onclick = async () => {
     if (!$("#et").value || !$("#ed").value || !$("#es").value) return toast("タイトル・日付・開始時間を入れてください");
     const start = new Date($("#ed").value + "T" + $("#es").value);
     let end = null;
     if ($("#ee").value) { end = new Date($("#ed").value + "T" + $("#ee").value); if (end <= start) end.setDate(end.getDate() + 1); } // 終了が開始より前なら翌日
-    const body = { title: $("#et").value, starts_at: start.toISOString(), ends_at: end ? end.toISOString() : "", place: $("#ep").value, note: $("#en").value };
+    const body = { title: $("#et").value, starts_at: start.toISOString(), ends_at: end ? end.toISOString() : "", place: $("#ep").value, note: $("#en").value,
+      category: $("#ecat").value, dispatch_kind: $("#ecat").value === "fire" ? $("#ekind").value : "" };
     ["et", "ed", "es", "ee", "ep", "en"].forEach((id) => ($("#" + id).value = "")); $("#newev").open = false;
     state.past = false;
     const p = mutate("events.add", body, (d) => d.events.push({ id: tmpId(), ...body, created_by: d.me.id, rsvps: [] }));
@@ -431,6 +500,8 @@ function renderEvents() {
     mutate("events.delete", { id }, (d) => (d.events = d.events.filter((x) => x.id !== id))).catch(ignore);
   }));
   document.querySelectorAll("[data-share]").forEach((b) => (b.onclick = () => share(b.dataset.share)));
+  document.querySelectorAll(".firelink [data-rec]").forEach((b) => (b.onclick = () => startRecord(b.dataset.rec)));
+  document.querySelectorAll(".firelink [data-addme]").forEach((b) => (b.onclick = () => addMe(b.dataset.addme)));
   if (state.focusEvent) { document.getElementById("ev" + state.focusEvent)?.scrollIntoView({ block: "center" }); }
 }
 
@@ -438,7 +509,7 @@ async function share(eventId) {
   const e = state.data.events.find((x) => x.id === eventId);
   if (!e) return;
   const url = (DEMO ? location.href.split("?")[0] : CFG.APP_URL) + "?event=" + e.id;
-  const text = `【出欠確認】${e.title}\n🕒 ${fmtRange(e.starts_at, e.ends_at)}${e.place ? "\n📍 " + e.place : ""}\n\n参加・不参加はこちらから回答してください👇\n${url}`;
+  const text = `【出欠確認】${e.title}\n🕒 ${fmtRange(e.starts_at, e.ends_at)}${e.place ? "\n📍 " + e.place : ""}\n\n参加・不参加はこちらから回答してください👇\n${url}${isFire(e) ? "\n\n🚒 消防関係のため、当日は参加者がアプリで出動記録を入力してください。" : ""}`;
   if (/iPhone|iPad|Android/i.test(navigator.userAgent)) {
     window.open("https://line.me/R/share?text=" + encodeURIComponent(text), "_blank");
   } else {
@@ -454,15 +525,21 @@ function renderDispatches() {
   list.forEach((d) => { kinds[d.kind] = (kinds[d.kind] || 0) + 1; d.dispatch_members.forEach((x) => (count[x.member_id] = (count[x.member_id] || 0) + 1)); });
   const thisYear = new Date().getFullYear();
   const years = [thisYear, thisYear - 1, thisYear - 2];
+  // 消防関係のイベントから開いたときは、イベントの内容を最初から入れておく
+  const pf = state.prefill;
+  const pfTime = (iso) => (iso ? new Date(iso).toTimeString().slice(0, 5) : "");
+  const pfKind = pf ? (KINDS.includes(pf.dispatch_kind) ? pf.dispatch_kind : "訓練") : "";
+  const pfOn = (m) => m.id === me().id || (pf && pf.rsvps.some((r) => r.member_id === m.id && r.status === "yes"));
   $("#app").innerHTML = `
-    <details class="card" id="newd"><summary>＋ 出動を記録する</summary>
-      <label>日付</label><input type="date" id="dd" value="${new Date().toLocaleDateString("sv-SE")}">
-      <div class="row"><div style="flex:1"><label>出動（開始）</label><input type="time" id="dts"></div><div style="flex:1"><label>引き揚げ（終了）</label><input type="time" id="dte"></div></div>
-      <label>種別</label><select id="dk">${KINDS.map((k) => `<option>${k}</option>`).join("")}</select>
-      <label>場所</label><input id="dp" placeholder="例：○○町2丁目">
+    <details class="card" id="newd" ${pf ? "open" : ""}><summary>＋ 出動を記録する</summary>
+      ${pf ? `<p class="firelink">📅 イベント「${esc(pf.title)}」の出動記録です <button class="btn sub small" id="pfx">やめる</button></p>` : ""}
+      <label>日付</label><input type="date" id="dd" value="${pf ? ymdLocal(pf.starts_at) : new Date().toLocaleDateString("sv-SE")}">
+      <div class="row"><div style="flex:1"><label>出動（開始）</label><input type="time" id="dts" value="${pf ? pfTime(pf.starts_at) : ""}"></div><div style="flex:1"><label>引き揚げ（終了）</label><input type="time" id="dte" value="${pf ? pfTime(pf.ends_at) : ""}"></div></div>
+      <label>種別</label><select id="dk">${KINDS.map((k) => `<option ${k === pfKind ? "selected" : ""}>${k}</option>`).join("")}</select>
+      <label>場所</label><input id="dp" placeholder="例：○○町2丁目" value="${pf ? esc(pf.place) : ""}">
       <label>出動した団員</label>
-      <div class="checks">${state.data.members.map((m) => `<label><input type="checkbox" id="dm_${m.id}" value="${m.id}" ${m.id === me().id ? "checked" : ""}>${label(m)}</label>`).join("")}</div>
-      <label>内容・メモ</label><textarea id="dn" placeholder="活動内容、使用資機材など"></textarea>
+      <div class="checks">${state.data.members.map((m) => `<label><input type="checkbox" id="dm_${m.id}" value="${m.id}" ${pfOn(m) ? "checked" : ""}>${label(m)}</label>`).join("")}</div>
+      <label>内容・メモ</label><textarea id="dn" placeholder="活動内容、使用資機材など">${pf ? esc(pf.title) : ""}</textarea>
       <p><button class="btn" id="db">記録する</button></p></details>
     <div class="spread"><h2>出動記録</h2><select id="yr" data-keep="no" style="width:auto">${years.map((y) => `<option ${y === state.year ? "selected" : ""}>${y}</option>`).join("")}</select></div>
     <div class="card"><h3>${state.year}年の集計　計 ${list.length} 件</h3>
@@ -473,18 +550,26 @@ function renderDispatches() {
     ${list.map((d) => `<div class="card">
       <div class="spread"><div><span class="kind">${esc(d.kind)}</span>　${esc(d.date)}${fmtTimes(d) ? "　" + esc(fmtTimes(d)) : ""}</div>${canEdit(d.created_by) && !d.id.startsWith("tmp") ? `<button class="btn sub small" data-del-d="${d.id}">削除</button>` : ""}</div>
       ${d.place ? `<div class="muted">📍 ${esc(d.place)}</div>` : ""}
+      ${d.event_id ? `<div class="muted">📅 イベント：${esc(state.data.events.find((e) => e.id === d.event_id)?.title ?? "（削除済み）")}</div>` : ""}
       ${d.note ? `<div style="margin-top:6px;white-space:pre-wrap">${esc(d.note)}</div>` : ""}
       <div style="margin-top:6px">${d.dispatch_members.map((x) => `<span class="tag">${label(x.member_id)}</span>`).join("")}</div>
       <div class="muted" style="margin-top:4px">${d.id.startsWith("tmp") ? "保存中…" : "記録：" + esc(nameOf(d.created_by))}</div></div>`).join("") || '<p class="muted">記録はまだありません。</p>'}`;
   $("#yr").onchange = (e) => { state.year = Number(e.target.value); render(); };
+  if ($("#pfx")) $("#pfx").onclick = () => { state.prefill = null; state.noKeep = true; render(); };
   $("#db").onclick = () => {
     const member_ids = [...document.querySelectorAll(".checks input:checked")].map((i) => i.value);
-    const body = { date: $("#dd").value, start_time: $("#dts").value, end_time: $("#dte").value, kind: $("#dk").value, place: $("#dp").value, note: $("#dn").value, member_ids };
+    const body = { date: $("#dd").value, start_time: $("#dts").value, end_time: $("#dte").value, kind: $("#dk").value, place: $("#dp").value, note: $("#dn").value, member_ids, event_id: pf ? pf.id : "" };
     if (!body.date) return toast("日付を入れてください");
     $("#dp").value = $("#dn").value = $("#dts").value = $("#dte").value = ""; $("#newd").open = false;
     state.year = Number(body.date.slice(0, 4));
-    mutate("dispatches.add", body, (d) => d.dispatches.push({ id: tmpId(), ...body, created_by: d.me.id, dispatch_members: member_ids.map((x) => ({ member_id: x })) })).catch(ignore);
-    toast("記録しました");
+    state.prefill = null;
+    const linked = pf && state.data.dispatches.find((x) => x.event_id === pf.id); // 他の人が先に入力していたら、そこに足す
+    mutate("dispatches.add", body, (d) => {
+      const x = linked && d.dispatches.find((y) => y.id === linked.id);
+      if (x) member_ids.forEach((m) => { if (!x.dispatch_members.some((y) => y.member_id === m)) x.dispatch_members.push({ member_id: m }); });
+      else d.dispatches.push({ id: tmpId(), ...body, created_by: d.me.id, dispatch_members: member_ids.map((x) => ({ member_id: x })) });
+    }).catch(ignore);
+    toast(linked ? "先に入力された記録に追加しました" : "記録しました");
   };
   document.querySelectorAll("[data-del-d]").forEach((b) => (b.onclick = () => {
     if (!confirm("この記録を削除しますか？")) return;
