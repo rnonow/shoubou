@@ -288,15 +288,6 @@ function mutate_(action, b, token) {
       me.is_admin = 'false'; update_('members', me._row, me);
       return { ok: true, to: to.name };
 
-    case 'members.logoutAll': // 全員をログアウト（自分のこの端末だけ残す）。団員の記録は消えない
-      adminOnly();
-      var sh = sheet_('members');
-      if (members.length) {
-        var col = SHEETS.members.indexOf('token') + 1;
-        sh.getRange(2, col, members.length, 1).setValues(members.map(function (x) { return [x.id === me.id ? token : '']; }));
-      }
-      return { ok: true, count: members.length - 1 };
-
     case 'settings.setJoinCode':
       adminOnly();
       var c = String(b.code || '').trim(); if (c.length < 4) fail_('参加コードは4文字以上にしてください。');
