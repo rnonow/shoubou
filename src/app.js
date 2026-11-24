@@ -525,7 +525,7 @@ function renderNotices() {
     <details class="card" id="newn"><summary>＋ お知らせを書く</summary>
       <label>タイトル</label><input id="nt" placeholder="例：12月 部長会のお知らせ">
       <label>本文</label><textarea id="nb" placeholder="内容（任意）"></textarea>
-      <label>資料の写真（${6}枚まで）</label>
+      <label>資料の写真（${NOTICE_MAX}枚まで）</label>
       <input type="file" id="nf" accept="image/&#42;" multiple data-keep="no">
       <div class="thumbs" id="npv">${pendingImages.map((d, i) => `<span class="thumb"><img src="${d}"><button data-rmimg="${i}">×</button></span>`).join("")}</div>
       <p><button class="btn" id="nbtn">投稿する</button></p></details>
